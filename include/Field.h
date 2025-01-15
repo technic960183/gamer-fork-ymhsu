@@ -26,6 +26,12 @@ SET_GLOBAL( FieldIdx_t Idx_Engy,          Idx_Undefined );
 #ifdef COSMIC_RAY
 SET_GLOBAL( FieldIdx_t Idx_CRay,          Idx_Undefined );
 #endif
+#ifdef CR_STREAMING
+SET_GLOBAL( FieldIdx_t Idx_CR_E,          Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_CR_F1,         Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_CR_F2,         Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_CR_F3,         Idx_Undefined );
+#endif
 #ifdef DUAL_ENERGY
 SET_GLOBAL( FieldIdx_t Idx_Dual,          Idx_Undefined );
 #endif

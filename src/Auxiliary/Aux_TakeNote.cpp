@@ -182,6 +182,11 @@ void Aux_TakeNote()
 #     else
       fprintf( Note, "CR_DIFFUSION                    OFF\n" );
 #     endif
+#     ifdef CR_STREAMING
+      fprintf( Note, "CR_STREAMING                    ON\n" );
+#     else
+      fprintf( Note, "CR_STREAMING                    OFF\n" );
+#     endif
 #     else // #ifdef COSMIC_RAY
       fprintf( Note, "COSMIC_RAY                      OFF\n" );
 #     endif // #ifdef COSMIC_RAY ... else ...

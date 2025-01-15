@@ -200,8 +200,15 @@
 #  define NCOMP_PASSIVE_BUILTIN1    0
 # endif
 
+// cosmic ray streaming
+# ifdef CR_STREAMING
+#  define NCOMP_PASSIVE_BUILTIN2    4
+# else
+#  define NCOMP_PASSIVE_BUILTIN2    0
+# endif
+
 // total number of built-in scalars
-#  define NCOMP_PASSIVE_BUILTIN     ( NCOMP_PASSIVE_BUILTIN0 + NCOMP_PASSIVE_BUILTIN1 )
+#  define NCOMP_PASSIVE_BUILTIN     ( NCOMP_PASSIVE_BUILTIN0 + NCOMP_PASSIVE_BUILTIN1 + NCOMP_PASSIVE_BUILTIN2 )
 
 #endif // #if ( MODEL == HYDRO )
 
@@ -302,6 +309,16 @@
 #  define PASSIVE_NEXT_IDX2   ( PASSIVE_NEXT_IDX1 )
 # endif
 
+# ifdef CR_STREAMING
+#  define CR_E                ( PASSIVE_NEXT_IDX2 )
+#  define CR_F1               ( CR_E - 1          )
+#  define CR_F2               ( CR_F1 - 1         )
+#  define CR_F3               ( CR_F2 - 1         )
+#  define PASSIVE_NEXT_IDX6   ( CR_F3 - 1         )
+# else
+#  define PASSIVE_NEXT_IDX6   ( PASSIVE_NEXT_IDX2 )
+# endif
+
 #endif // #if ( NCOMP_PASSIVE > 0 )
 
 // field indices of magnetic --> element of [0 ... NCOMP_MAG-1]
@@ -338,6 +355,16 @@
 #  define FLUX_NEXT_IDX2   ( FLUX_NEXT_IDX1  )
 # endif
 
+# ifdef CR_STREAMING
+#  define FLUX_CR_E        ( FLUX_NEXT_IDX2  )
+#  define FLUX_CR_F1       ( FLUX_CR_E - 1   )
+#  define FLUX_CR_F2       ( FLUX_CR_F1 - 1  )
+#  define FLUX_CR_F3       ( FLUX_CR_F2 - 1  )
+#  define FLUX_NEXT_IDX6   ( FLUX_CR_F3 - 1  )
+# else
+#  define FLUX_NEXT_IDX6   ( FLUX_NEXT_IDX2  )
+# endif
+
 #endif // #if ( NCOMP_PASSIVE > 0 )
 
 // bitwise field indices
@@ -358,6 +385,13 @@
 
 # ifdef COSMIC_RAY
 #  define _CRAY               ( 1L << CRAY )
+# endif
+
+# ifdef CR_STREAMING
+#  define _CR_E               ( 1L << CR_E )
+#  define _CR_F1              ( 1L << CR_F1 )
+#  define _CR_F2              ( 1L << CR_F2 )
+#  define _CR_F3              ( 1L << CR_F3 )
 # endif
 
 #endif // #if ( NCOMP_PASSIVE > 0 )
@@ -387,6 +421,13 @@
 
 # ifdef COSMIC_RAY
 #  define _FLUX_CRAY          ( 1L << FLUX_CRAY )
+# endif
+
+# ifdef CR_STREAMING
+#  define _FLUX_CR_E          ( 1L << FLUX_CR_E )
+#  define _FLUX_CR_F1         ( 1L << FLUX_CR_F1 )
+#  define _FLUX_CR_F2         ( 1L << FLUX_CR_F2 )
+#  define _FLUX_CR_F3         ( 1L << FLUX_CR_F3 )
 # endif
 
 #endif // #if ( NFLUX_PASSIVE > 0 )

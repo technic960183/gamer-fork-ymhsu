@@ -701,6 +701,13 @@ def load_arguments( sys_setting : SystemSetting ):
                          help="Enable cosmic-ray diffusion. Must enable <--mhd> and <--cosmic_ray>.\n"
                        )
 
+    parser.add_argument( "--cr_streaming", type=str2bool, metavar="BOOLEAN", gamer_name="CR_STREAMING",
+                         default=False,
+                         depend={"cosmic_ray":True},
+                         constraint={ True:{"cosmic_ray":True, "mhd":True} },
+                         help="Enable cosmic-ray streaming. Must enable <--mhd> and <--cosmic_ray>.\n"
+                       )
+
     # B. miscellaneous options
     parser.add_argument( "--nlevel", type=int, metavar="INTEGER", gamer_name="NLEVEL",
                          default=10,

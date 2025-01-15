@@ -136,6 +136,17 @@ void Init_Field()
 // 4. must put all built-in scalars at the END of the field list and with the same order as their
 //    corresponding symbolic constants (e.g., DUAL/CRAY) defined in Macro.h
 //    --> as we still rely on these constants (e.g., DENS, DUAL) in the fluid solvers
+#  ifdef CR_STREAMING
+   Idx_CR_F3 = AddField( "CR_F3", FIXUP_FLUX_YES, FIXUP_REST_YES, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_CR_F2 = AddField( "CR_F2", FIXUP_FLUX_YES, FIXUP_REST_YES, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_CR_F1 = AddField( "CR_F1", FIXUP_FLUX_YES, FIXUP_REST_YES, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_CR_E  = AddField( "CR_E" , FIXUP_FLUX_YES, FIXUP_REST_YES, NORMALIZE_NO, INTERP_FRAC_NO );
+   if ( Idx_CR_F3 != CR_F3 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F3 (%d != %d) !!\n", Idx_CR_F3, CR_F3 );
+   if ( Idx_CR_F2 != CR_F2 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F2 (%d != %d) !!\n", Idx_CR_F2, CR_F2 );
+   if ( Idx_CR_F1 != CR_F1 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F1 (%d != %d) !!\n", Idx_CR_F1, CR_F1 );
+   if ( Idx_CR_E  != CR_E  )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_E  (%d != %d) !!\n", Idx_CR_E,  CR_E  );
+#  endif
+
 #  ifdef COSMIC_RAY
    Idx_CRay = AddField( "CRay", FIXUP_FLUX_YES, FIXUP_REST_YES, NORMALIZE_NO, INTERP_FRAC_NO );
    if ( Idx_CRay != CRAY )    Aux_Error( ERROR_INFO, "inconsistent Idx_CRay (%d != %d) !!\n", Idx_CRay, CRAY );

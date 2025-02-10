@@ -151,6 +151,28 @@ void CR_AddDiffuseFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                  const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
                                  const int NFlux, const real dh, const MicroPhy_t *MicroPhy );
 #endif // #ifdef CR_DIFFUSION
+#ifdef CR_STREAMING
+void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
+                                  real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],
+                            const real g_CC_B[][ CUBE(FLU_NXT) ],
+                            const real dh, const MicroPhy_t *MicroPhy );
+void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
+                                       real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
+                                 const int NFlux, const real dh, const MicroPhy_t *MicroPhy );
+void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
+                            const real g_ConVar_In[][ CUBE(FLU_NXT) ],
+                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                            const int idx_fc, const int didx_fc[3],
+                            const int idx_flux, const int didx_flux[3],
+                            const real dt_dh2, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
+void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
+                                      real g_Output[][ CUBE(PS2) ],
+                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
+                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );                          
+#endif // #ifdef CR_STREAMING
 #endif // #ifdef COSMIC_RAY
 
 #endif // #ifdef __CUDACC__ ... else ...
@@ -174,7 +196,7 @@ static void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
                                   const real MinDens, const real MinPres, const real MinEint,
                                   const bool FracPassive, const int NFrac, const int FracIdx[],
                                   const bool JeansMinPres, const real JeansMinPres_Coeff,
-                                  const EoS_t *EoS );
+                                  const EoS_t *EoS, const MicroPhy_t *MicroPhy );
 #endif
 
 
@@ -443,6 +465,11 @@ void CPU_FluidSolver_MHM(
 #        endif
 
 
+#        ifdef CR_STREAMING
+         CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_Mag_Array_In[P], g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
+#        endif
+
+
 //       1-a-3. evaluate electric field and update B field at the half time-step
 #        ifdef MHD
          MHD_ComputeElectric( g_EC_Ele_1PG, g_Flux_Half_1PG, g_PriVar_1PG, N_HF_ELE, N_HF_FLUX,
@@ -458,7 +485,7 @@ void CPU_FluidSolver_MHM(
 //       1-a-4. evaluate the half-step solutions
          Hydro_RiemannPredict( g_Flu_Array_In[P], g_FC_Mag_Half_1PG, g_Flux_Half_1PG, g_PriVar_Half_1PG,
                                dt, dh, MinDens, MinPres, MinEint, FracPassive, NFrac, c_FracIdx,
-                               JeansMinPres, JeansMinPres_Coeff, &EoS );
+                               JeansMinPres, JeansMinPres_Coeff, &EoS, &MicroPhy );
 
 
          do {
@@ -537,6 +564,10 @@ void CPU_FluidSolver_MHM(
             CR_AddDiffuseFlux_FullStep( g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG, N_FL_FLUX, dh, &MicroPhy );
 #           endif
 
+#           ifdef CR_STREAMING
+            CR_TwoMomentFlux_FullStep( g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG, N_FL_FLUX, dh, &MicroPhy );
+#           endif
+
 
             if ( StoreFlux )
                Hydro_StoreIntFlux( g_FC_Flux_1PG, g_Flux_Array[P], N_FL_FLUX );
@@ -571,6 +602,11 @@ void CPU_FluidSolver_MHM(
 #           ifdef COSMIC_RAY
             CR_AdiabaticWork_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG, g_FC_Var_1PG,
                                        dt, dh, &EoS );
+#           endif
+
+#           ifdef CR_STREAMING
+            CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG, g_FC_Var_1PG,
+                                         dt, dh, &EoS, &MicroPhy );
 #           endif
 
 
@@ -820,6 +856,7 @@ void Hydro_RiemannPredict_Flux( const real g_ConVar[][ CUBE(FLU_NXT) ],
 //                JeansMinPres       : Apply minimum pressure estimated from the Jeans length
 //                JeansMinPres_Coeff : Coefficient used by JeansMinPres = G*(Jeans_NCell*Jeans_dh)^2/(Gamma*pi);
 //                EoS                : EoS object
+//                MicroPhy           : Microphysics object
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
 void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
@@ -830,7 +867,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
                            const real MinDens, const real MinPres, const real MinEint,
                            const bool FracPassive, const int NFrac, const int FracIdx[],
                            const bool JeansMinPres, const real JeansMinPres_Coeff,
-                           const EoS_t *EoS )
+                           const EoS_t *EoS, const MicroPhy_t *MicroPhy )
 {
 
    const int  didx_flux[3] = { 1, N_HF_FLUX, SQR(N_HF_FLUX) };
@@ -891,6 +928,11 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #     ifdef COSMIC_RAY
       CR_AdiabaticWork_HalfStep_MHM_RP( out_con, g_ConVar_In, g_Flux_Half, idx_in, didx_in,
                                         idx_flux, didx_flux, dt_dh2, EoS );
+#     endif
+
+#     ifdef CR_STREAMING
+      CR_TwoMomentSource_HalfStep( out_con, g_ConVar_In, g_Flux_Half, idx_in, didx_in,
+                                   idx_flux, didx_flux, dt_dh2, EoS, MicroPhy );
 #     endif
 
 

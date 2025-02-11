@@ -397,6 +397,12 @@ extern double DT__CR_DIFFUSION;
 extern double CR_DIFF_MIN_B;
 #endif
 
+#ifdef CR_STREAMING
+extern bool   CR_SOURCE;
+extern bool   CR_STREAM;
+extern double CR_VMAX;
+extern double CR_SIGMA;
+#endif
 
 
 // 3. CPU (host) arrays for transferring data between CPU and GPU

@@ -291,6 +291,12 @@ void Init_Load_Parameter()
    ReadPara->Add( "CR_DIFF_MIN_B",              &CR_DIFF_MIN_B,                   0.0,             NoMin_double,  NoMax_double   );
 #  endif
 
+# ifdef CR_STREAMING
+   ReadPara->Add( "CR_SOURCE",                  &CR_SOURCE,                       false,           Useless_bool,  Useless_bool   );
+   ReadPara->Add( "CR_STREAM",                  &CR_STREAM,                       true,            Useless_bool,  Useless_bool   );
+   ReadPara->Add( "CR_VMAX",                    &CR_VMAX,                         1e2,             0.0,           NoMax_double   );
+   ReadPara->Add( "CR_SIGMA",                   &CR_SIGMA,                        1e8,             0.0,           NoMax_double   );
+# endif
 
 // fluid solvers in HYDRO
 #  if ( MODEL == HYDRO )

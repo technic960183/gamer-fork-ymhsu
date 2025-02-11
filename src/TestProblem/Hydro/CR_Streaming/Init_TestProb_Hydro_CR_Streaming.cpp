@@ -4,11 +4,7 @@
 
 // problem-specific global variables
 // =======================================================================================
-static bool   CR_Source;                // add cosmic ray source term
-static bool   CR_Stream;                // add cosmic ray streaming term
-static double CR_vMax;                  // maximum velocity on the streaming direction
 static double CR_v0;                    // velocity on the streaming direction
-static double CR_sigma;                 // Diffusion coefficient
 static int    CR_Streaming_Dir;         // streaming direction
 // =======================================================================================
 
@@ -96,10 +92,6 @@ void SetParameter()
 // ********************************************************************************************************************************
 // ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
 // ********************************************************************************************************************************
-   ReadPara->Add( "CR_Source",         &CR_Source,              false,       Useless_bool,     Useless_bool      );
-   ReadPara->Add( "CR_Stream",         &CR_Stream,              true,        Useless_bool,     Useless_bool      );
-   ReadPara->Add( "CR_vMax",           &CR_vMax,                1e2,         0.0,              NoMax_double      );
-   ReadPara->Add( "CR_sigma",          &CR_sigma,               1e8,         0.0,              NoMax_double      );
    ReadPara->Add( "CR_v0",             &CR_v0,                  0.0,         0.0,              NoMax_double      );
    ReadPara->Add( "CR_Streaming_Dir",  &CR_Streaming_Dir,       0,           0,                2                 );
 
@@ -144,10 +136,6 @@ void SetParameter()
    {
       Aux_Message( stdout, "=============================================================================\n" );
       Aux_Message( stdout, "  test problem ID       = %d\n",     TESTPROB_ID );
-      Aux_Message( stdout, "  CR_Source             = %d\n",     CR_Source );
-      Aux_Message( stdout, "  CR_Stream             = %d\n",     CR_Stream );
-      Aux_Message( stdout, "  CR_vMax               = %14.7e\n", CR_vMax );
-      Aux_Message( stdout, "  CR_sigma              = %14.7e\n", CR_sigma );
       Aux_Message( stdout, "  CR_v0                 = %14.7e\n", CR_v0 );
       Aux_Message( stdout, "  CR_Streaming_Dir      = %d\n",     CR_Streaming_Dir      );
       Aux_Message( stdout, "=============================================================================\n" );
@@ -207,7 +195,7 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 
    P_cr = 1.0; // placeholder for now
 
-   const double cr_F = CR_v0*4.0*cr_E/(3.0*CR_vMax) - ((r < amr->BoxCenter[CR_Streaming_Dir]) ? 1.0 : -1.0)/CR_sigma;
+   const double cr_F = CR_v0*4.0*cr_E/(3.0*CR_VMAX) - ((r < amr->BoxCenter[CR_Streaming_Dir]) ? 1.0 : -1.0)/CR_SIGMA;
    cr_F1 = (CR_Streaming_Dir == 0) ? cr_F : 0.0;
    cr_F2 = (CR_Streaming_Dir == 1) ? cr_F : 0.0;
    cr_F3 = (CR_Streaming_Dir == 2) ? cr_F : 0.0;

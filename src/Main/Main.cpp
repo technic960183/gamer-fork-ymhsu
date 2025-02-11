@@ -365,6 +365,14 @@ double DT__CR_DIFFUSION;
 double CR_DIFF_MIN_B;
 #endif
 
+// c. cosmic-ray streaming
+#ifdef CR_STREAMING
+bool CR_SOURCE;
+bool CR_STREAM;
+double CR_VMAX;
+double CR_SIGMA;
+#endif
+
 
 // 3. CPU (host) arrays for transferring data between CPU and GPU
 // =======================================================================================================

@@ -131,6 +131,10 @@ CR_DIFF_PARA                  0.05        # cosmic-ray diffusion coefficients pa
 CR_DIFF_PERP                  0.0         # magnetic field [0.0] ##CR_DIFFUSION only##
 CR_DIFF_MIN_B                 0.0         # disable diffusion locally when B field amplitude is smaller than this threshold (<=0=off) [0.0] ##CR_DIFFUSION only##
 
+CR_SOURCE                     0           # Include source feedback [0/1]
+CR_STREAM                     1           # Turn on streaming [0/1]
+CR_VMAX                       1e2         # Maximum velocity on the streaming direction
+CR_SIGMA                      1e8         # Diffusion coefficient
 
 # fluid solver in HYDRO (MODEL==HYDRO only)
 GAMMA                         1.666666667 # ratio of specific heats (i.e., adiabatic index) [5.0/3.0] ##EOS_GAMMA ONLY##

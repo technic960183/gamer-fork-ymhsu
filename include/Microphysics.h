@@ -31,6 +31,13 @@ struct MicroPhy_t
    real CR_diff_min_b;
 #  endif
 
+#  ifdef CR_STREAMING
+   bool CR_source;
+   bool CR_stream;
+   real CR_vmax;
+   real CR_sigma;
+#  endif
+
 // somehow the structure itself cannot be empty, so we declare a useless bool variable to avoid the issue
 // --> error message from valgrind: Address 0x176aa160 is 0 bytes after a block of size 0 alloc'd
    bool useless;

@@ -33,6 +33,13 @@ void Microphysics_Init()
    MicroPhy.CR_diff_min_b      = CR_DIFF_MIN_B;
 #  endif // #ifdef CR_DIFFUSION
 
+#  ifdef CR_STREAMING
+   MicroPhy.CR_source          = CR_SOURCE;
+   MicroPhy.CR_stream          = CR_STREAM;
+   MicroPhy.CR_vmax            = CR_VMAX;
+   MicroPhy.CR_sigma           = CR_SIGMA;
+#  endif // #ifdef CR_STREAMING
+
    MicroPhy_Initialized = true;
 
 

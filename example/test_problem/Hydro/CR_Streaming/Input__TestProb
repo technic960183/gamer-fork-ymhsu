@@ -1,8 +1,4 @@
 # problem-specific runtime parameters
-CR_Source                0              # Include source feedback [0/1]
-CR_Stream                1              # Turn on streaming [0/1]
-CR_vMax                  1e2            # Maximum reduce velocity
-CR_sigma                 1e8            # Diffusion coefficient
 CR_v0                    0.0            # Cosmic-ray initial velocity
 CR_Streaming_Dir         0              # Streaming direction
 

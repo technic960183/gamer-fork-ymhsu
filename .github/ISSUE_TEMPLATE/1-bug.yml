@@ -28,6 +28,11 @@ body:
     attributes:
       label: Steps to reproduce
       description: Please provide steps to help us reproduce the issue.
+      placeholder: |
+        e.g.
+        1. Copy the shocktube test problem from `example/Hydro/Riemann/*`.
+        2. Build GAMER with CXXFLAG -g -O0 in the machine configuration file.
+        3. Run `./gamer`. And a segmentation fault occurs.
     validations:
       required: true
 
@@ -68,6 +73,25 @@ body:
         - Windows (x86)
         - Windows (ARM)
         - Other (Please specify below)
+
+  - type: textarea
+    id: machine
+    attributes:
+      label: Machine Configuration File
+      description: Please provide the machine configuration file you are using. If it is a provided one, just specify the name.
+      placeholder: |
+        e.g.
+        # NTU-spock
+        CUDA_PATH       /software/cuda/12.1
+        FFTW2_PATH      /software/fftw/2.1.5-intel-2023.1.0-openmpi-4.1.5-ucx_mt
+        FFTW3_PATH      /software/fftw/3.3.10-intel-2023.1.0-openmpi-4.1.5-ucx_mt
+        MPI_PATH        /software/openmpi/4.1.5-ucx_mt-intel-2023.1.0
+        ...
+
+        # compilers
+        CXX     icpc
+        CXX_MPI mpicxx
+        ...
 
   - type: checkboxes
     id: labels

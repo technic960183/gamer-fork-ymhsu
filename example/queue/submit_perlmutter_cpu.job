@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --account=deepsrch
+#SBATCH --job-name=GAMER_CPU
+#SBATCH --qos=debug
+#SBATCH --time=0:20:00
+#SBATCH --nodes=1
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=technic960183@gmail.com
+
+## Do not modify the following lines
+#SBATCH --constraint=cpu
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=256
+export OMP_PROC_BIND=spread
+export OMP_PLACES=threads
+
+srun ./gamer

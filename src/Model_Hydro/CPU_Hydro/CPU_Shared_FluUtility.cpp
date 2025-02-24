@@ -902,7 +902,9 @@ bool Hydro_IsUnphysical( const IsUnphyMode_t Mode, const real Fields[], const ch
 //          check passive scalars (which can be zero)
             else
             {
-               if ( Fields[v] < (real)0.0  ||  Fields[v] > HUGE_NUMBER )
+               if ( Fields[v] < (real)0.0 && PassiveVar_Floor & BIDX(v) )
+                  UnphyCell = true;
+               if ( Fields[v] < -HUGE_NUMBER  ||  Fields[v] > HUGE_NUMBER )
                   UnphyCell = true;
             }
          } // for (int v=0; v<NCOMP_TOTAL; v++)
@@ -1017,7 +1019,9 @@ bool Hydro_IsUnphysical( const IsUnphyMode_t Mode, const real Fields[], const ch
 //          check passive scalars (which can be zero)
             else
             {
-               if ( Fields[v] < (real)0.0  ||  Fields[v] > HUGE_NUMBER )
+               if ( Fields[v] < (real)0.0 && PassiveVar_Floor & BIDX(v) )
+                  UnphyCell = true;
+               if ( Fields[v] < -HUGE_NUMBER  ||  Fields[v] > HUGE_NUMBER )
                   UnphyCell = true;
             }
          } // for (int v=0; v<NCOMP_TOTAL; v++)
@@ -1059,8 +1063,12 @@ bool Hydro_IsUnphysical( const IsUnphyMode_t Mode, const real Fields[], const ch
             if ( Fields[v] != Fields[v] )
                UnphyCell = true;
 
-//          check negative and infinity (passive scalars can be zero)
-            if ( Fields[v] < (real)0.0  ||  Fields[v] > HUGE_NUMBER )
+//          check negative (passive scalars can be zero)
+            if ( Fields[v] < (real)0.0 && PassiveVar_Floor & BIDX(v+NCOMP_FLUID) )
+               UnphyCell = true;
+
+//          check infinity
+            if ( Fields[v] < -HUGE_NUMBER  ||  Fields[v] > HUGE_NUMBER )
                UnphyCell = true;
          }
 

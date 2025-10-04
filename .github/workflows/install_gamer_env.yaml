@@ -1,0 +1,32 @@
+name: Install GAMER Environment
+
+on:
+  workflow_call:
+
+jobs:
+  install-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install OpenMPI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - name: Verify MPI Installation
+        run: |
+          which mpirun
+          which mpicxx
+          mpicxx --version
+          mpirun --version
+
+      - name: Configure GAMER Machine Settings
+        run: |
+          cd tool/config
+          bash set_settings.sh --local --machine=github_action
+
+      - name: Verify Configuration
+        run: |
+          cat src/.local_settings

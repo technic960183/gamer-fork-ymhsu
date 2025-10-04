@@ -12,16 +12,16 @@ This repository includes configurations for compiling and running GAMER on GitHu
    - HDF5_PATH: `/usr/lib/x86_64-linux-gnu/hdf5/serial` (HDF5 library path)
    - Compiler flags: `-g -O2`
 
-2. **.github/workflows/install_gamer_env.yaml** - Reusable workflow for setting up GAMER environment
+2. **.github/install_gamer_env.sh** - Setup script for GAMER environment
    - Installs OpenMPI (openmpi-bin and libopenmpi-dev)
    - Installs HDF5 (libhdf5-dev)
    - Installs CUDA toolkit (nvidia-cuda-toolkit)
    - Configures GAMER to use `github_action` machine settings
    - Verifies installation
 
-## Using the Reusable Workflow
+## Using the Setup Script
 
-To use the GAMER environment setup in your own workflow:
+To use the GAMER environment setup script in your workflow:
 
 ```yaml
 name: My GAMER Workflow
@@ -31,25 +31,14 @@ on:
     branches: [ main ]
 
 jobs:
-  setup-environment:
-    uses: ./.github/workflows/install_gamer_env.yaml
-  
   compile-and-test:
-    needs: setup-environment
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
       
-      - name: Install OpenMPI
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y openmpi-bin libopenmpi-dev
-      
-      - name: Configure GAMER
-        run: |
-          cd tool/config
-          bash set_settings.sh --local --machine=github_action
+      - name: Setup GAMER Environment
+        run: bash .github/install_gamer_env.sh
       
       - name: Generate Makefile
         run: |

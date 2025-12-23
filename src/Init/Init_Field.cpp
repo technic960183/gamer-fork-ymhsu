@@ -140,6 +140,17 @@ void Init_Field()
 //    corresponding symbolic constants (e.g., DUAL/CRAY) defined in Macro.h
 //    --> as we still rely on these constants (e.g., DENS, DUAL) in the fluid solvers
 #  ifdef CR_STREAMING
+   // CR streaming advection fields (sigma_adv and v_adv components)
+   // --> FIXUP_FLUX_NO since these are auxiliary fields that don't need flux correction
+   Idx_ADV_VZ    = AddField( "ADV_VZ",    FIXUP_FLUX_NO, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_ADV_VY    = AddField( "ADV_VY",    FIXUP_FLUX_NO, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_ADV_VX    = AddField( "ADV_VX",    FIXUP_FLUX_NO, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_ADV_SIGMA = AddField( "ADV_SIGMA", FIXUP_FLUX_NO, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
+   if ( Idx_ADV_VZ    != ADV_VZ    )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_VZ    (%d != %d) !!\n", Idx_ADV_VZ,    ADV_VZ    );
+   if ( Idx_ADV_VY    != ADV_VY    )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_VY    (%d != %d) !!\n", Idx_ADV_VY,    ADV_VY    );
+   if ( Idx_ADV_VX    != ADV_VX    )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_VX    (%d != %d) !!\n", Idx_ADV_VX,    ADV_VX    );
+   if ( Idx_ADV_SIGMA != ADV_SIGMA )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_SIGMA (%d != %d) !!\n", Idx_ADV_SIGMA, ADV_SIGMA );
+   // CR flux fields
    Idx_CR_F3 = AddField( "CR_F3", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
    Idx_CR_F2 = AddField( "CR_F2", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
    Idx_CR_F1 = AddField( "CR_F1", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );

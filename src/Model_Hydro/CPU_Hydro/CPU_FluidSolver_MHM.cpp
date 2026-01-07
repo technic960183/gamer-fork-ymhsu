@@ -166,7 +166,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                             const int idx_fc, const int didx_fc[3],
                             const int idx_flux, const int didx_flux[3],
-                            const real dt_dh2, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
+                            const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
                                 const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
@@ -938,7 +938,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 
 #     ifdef CR_STREAMING
       CR_TwoMomentSource_HalfStep( out_con, g_ConVar_In, g_Flux_Half, idx_in, didx_in,
-                                   idx_flux, didx_flux, dt_dh2, EoS, MicroPhy );
+                                   idx_flux, didx_flux, dt, dh, EoS, MicroPhy );
 #     endif
 
 

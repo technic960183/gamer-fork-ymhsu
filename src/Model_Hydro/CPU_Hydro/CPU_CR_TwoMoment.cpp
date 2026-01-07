@@ -786,22 +786,24 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 //-------------------------------------------------------------------------------------------------------
 // Function    : CR_TwoMomentSource_HalfStep
 //
-// Description : Apply flux divergence to CR variables for the half-step predictor
+// Description : Apply implicit source term update for CR two-moment equations at half-step
 //
 // Note        : 1. The main flux divergence is already applied in the Hydro_RiemannPredict loop
-//               2. This function is currently a placeholder for any additional CR-specific source terms
-//               3. No implicit source solve at half-step (only at full-step)
+//               2. This function applies the implicit source term solve at half-step with dt_source = 0.5*dt
+//               3. Athena++ applies source terms at BOTH half-step and full-step for VL2 integrator
+//               4. No back-reaction to gas at half-step (only at full-step)
 //
-// Reference   : Athena++ cr_transport.cpp
+// Reference   : Athena++ cr_source.cpp, time_integrator.cpp
 //
 // Parameter   : OneCell     : Single-cell fluid array (already updated with flux divergence)
 //               g_ConVar_In : Array storing the input conserved variables
 //               g_Flux_Half : Array storing the input face-centered fluxes
 //               idx_fc      : Index of accessing g_ConVar_In[]
 //               didx_fc     : Index increment of g_ConVar_In[]
-//               idx_flux    : Index of accessing g_flux_Half[]
+//               idx_flux    : Index of accessing g_Flux_Half[]
 //               didx_flux   : Index increment of g_Flux_Half[]
-//               dt_dh2      : 0.5 * dt / dh
+//               dt          : Full time step (source uses 0.5*dt for half-step)
+//               dh          : Cell size
 //               EoS         : EoS object
 //               MicroPhy    : Microphysics object
 //
@@ -813,17 +815,188 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                             const int idx_fc, const int didx_fc[3],
                             const int idx_flux, const int didx_flux[3],
-                            const real dt_dh2, const EoS_t *EoS , const MicroPhy_t *MicroPhy )
+                            const real dt, const real dh, const EoS_t *EoS , const MicroPhy_t *MicroPhy )
 {
 // The flux divergence update for CR_E, CR_F1, CR_F2, CR_F3 is already done
 // in the main Hydro_RiemannPredict loop above where out_con is updated.
-//
-// Here we ensure CR energy remains positive:
-   if ( OneCell[CR_E] < TINY_NUMBER )
-      OneCell[CR_E] = TINY_NUMBER;
 
-// Note: For the half-step, we skip the implicit source term solve.
-// The implicit source update (coupling between Ec, Fc and gas) is only applied at the full-step.
+// CR parameters
+   const real vmax   = MicroPhy->CR_vmax;
+   const real invlim = (real)1.0 / vmax;
+   const real _dh    = (real)1.0 / dh;
+
+// Half-step uses dt_source = 0.5 * dt (matching Athena++ VL2 stage 1 with beta=0.5)
+   const real dt_source = (real)0.5 * dt;
+
+// 1. Get current CR state (already has flux divergence applied)
+   real ec  = OneCell[CR_E];
+   real fc1 = OneCell[CR_F1];
+   real fc2 = OneCell[CR_F2];
+   real fc3 = OneCell[CR_F3];
+
+// 2. Get gas density and velocity from conserved variables
+   const real rho = g_ConVar_In[DENS][idx_fc];
+   real v1 = g_ConVar_In[MOMX][idx_fc] / rho;
+   real v2 = g_ConVar_In[MOMY][idx_fc] / rho;
+   real v3 = g_ConVar_In[MOMZ][idx_fc] / rho;
+
+// 3. Get B field (cell-centered)
+#  ifdef MHD
+   const real Bx = OneCell[MAG_OFFSET + MAGX];
+   const real By = OneCell[MAG_OFFSET + MAGY];
+   const real Bz = OneCell[MAG_OFFSET + MAGZ];
+#  else
+   const real Bx = (real)0.0;
+   const real By = (real)0.0;
+   const real Bz = (real)1.0;   // default B along z
+#  endif
+
+// 4. Compute B-field angles for rotation
+   real sint, cost, sinp, cosp;
+   CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
+
+// 5. Compute grad(Pc) using central differences on the conserved CR energy
+//    Note: Pc = Ec/3, so grad(Pc) = grad(Ec)/3
+   const real dPc_dx = ( g_ConVar_In[CR_E][idx_fc + didx_fc[0]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[0]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dy = ( g_ConVar_In[CR_E][idx_fc + didx_fc[1]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[1]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dz = ( g_ConVar_In[CR_E][idx_fc + didx_fc[2]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[2]] ) * (real)0.5 * _dh / (real)3.0;
+
+// 6. Compute B dot grad(Pc) and streaming velocity
+   const real Bsq = SQR(Bx) + SQR(By) + SQR(Bz);
+   const real Btot = SQRT( Bsq );
+   const real b_grad_pc = Bx * dPc_dx + By * dPc_dy + Bz * dPc_dz;
+
+// Alfven velocity
+   const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
+   const real va = Btot * inv_sqrt_rho;
+
+// Streaming velocity direction
+   real dpc_sign = (real)0.0;
+   if ( b_grad_pc > TINY_NUMBER )       dpc_sign = (real)1.0;
+   else if ( -b_grad_pc > TINY_NUMBER ) dpc_sign = (real)-1.0;
+
+// Streaming velocity components: v_adv = -sign(B dot grad Pc) * v_Alfven
+   const real v_adv_x = -Bx * inv_sqrt_rho * dpc_sign;
+   const real v_adv_y = -By * inv_sqrt_rho * dpc_sign;
+   const real v_adv_z = -Bz * inv_sqrt_rho * dpc_sign;
+
+// Total velocity = gas velocity + streaming velocity
+   real vtot1 = v1 + v_adv_x;
+   real vtot2 = v2 + v_adv_y;
+   real vtot3 = v3 + v_adv_z;
+
+// 7. Compute streaming opacity sigma_adv
+   real sigma_adv_para;
+   if ( va > TINY_NUMBER && ec > TINY_NUMBER ) {
+      sigma_adv_para = FABS(b_grad_pc) / ( Btot * va * ((real)4.0/(real)3.0) * invlim * ec );
+   } else {
+      sigma_adv_para = CR_MAX_OPACITY;
+   }
+   const real sigma_adv_perp = CR_MAX_OPACITY;
+
+// 8. Save original CR energy for floor check
+   const real ec_old = ec;
+
+// 9. Rotate all vectors to B-aligned frame
+   real fr1 = fc1, fr2 = fc2, fr3 = fc3;
+
+#  ifdef MHD
+   RotateVec( sint, cost, sinp, cosp, v1, v2, v3 );
+   RotateVec( sint, cost, sinp, cosp, fr1, fr2, fr3 );
+   RotateVec( sint, cost, sinp, cosp, vtot1, vtot2, vtot3 );
+
+// Perpendicular components have no streaming velocity contribution in B-frame
+   vtot2 = (real)0.0;
+   vtot3 = (real)0.0;
+#  endif
+
+// 10. Compute effective sigma (parallel combination of sigma_diff and sigma_adv)
+   const real sigma_diff = CR_MAX_OPACITY;
+
+   const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
+   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+
+// 11. Build implicit matrix and solve
+//     Source terms:
+//     dEc/dt = -vtot · sigma · (Fc - v*Ec*(4/3)/vmax)
+//     dFc/dt = -vmax · sigma · (Fc - v*Ec*(4/3)/vmax)
+
+   const real rhs1 = ec;
+   const real rhs2 = fr1;
+   const real rhs3 = fr2;
+   const real rhs4 = fr3;
+
+// Coefficients for Ec equation (row 1)
+   const real coef_11 = (real)1.0 - dt_source * sigma_x * vtot1 * v1 * invlim * ((real)4.0/(real)3.0)
+                                  - dt_source * sigma_y * vtot2 * v2 * invlim * ((real)4.0/(real)3.0)
+                                  - dt_source * sigma_z * vtot3 * v3 * invlim * ((real)4.0/(real)3.0);
+   const real coef_12 = dt_source * sigma_x * vtot1;
+   const real coef_13 = dt_source * sigma_y * vtot2;
+   const real coef_14 = dt_source * sigma_z * vtot3;
+
+// Coefficients for Fr1 equation (row 2)
+   const real coef_21 = -dt_source * v1 * sigma_x * ((real)4.0/(real)3.0);
+   const real coef_22 = (real)1.0 + dt_source * vmax * sigma_x;
+
+// Coefficients for Fr2 equation (row 3)
+   const real coef_31 = -dt_source * v2 * sigma_y * ((real)4.0/(real)3.0);
+   const real coef_33 = (real)1.0 + dt_source * vmax * sigma_y;
+
+// Coefficients for Fr3 equation (row 4)
+   const real coef_41 = -dt_source * v3 * sigma_z * ((real)4.0/(real)3.0);
+   const real coef_44 = (real)1.0 + dt_source * vmax * sigma_z;
+
+// Solve by substitution (since flux equations are decoupled from each other)
+   const real e_coef = coef_11 - coef_12 * coef_21 / coef_22 
+                               - coef_13 * coef_31 / coef_33
+                               - coef_14 * coef_41 / coef_44;
+
+   real new_ec = rhs1 - coef_12 * rhs2 / coef_22 
+                      - coef_13 * rhs3 / coef_33 
+                      - coef_14 * rhs4 / coef_44;
+   new_ec /= e_coef;
+
+// Back-substitute to get new flux
+   real newfr1 = ( rhs2 - coef_21 * new_ec ) / coef_22;
+   real newfr2 = ( rhs3 - coef_31 * new_ec ) / coef_33;
+   real newfr3 = ( rhs4 - coef_41 * new_ec ) / coef_44;
+
+// 12. Rotate back to lab frame
+#  ifdef MHD
+   InvRotateVec( sint, cost, sinp, cosp, newfr1, newfr2, newfr3 );
+#  endif
+
+// 13. Compute perpendicular heating term (ec_source)
+//     This is the work done by perpendicular gas flow: v_perp · grad(Pc)
+#  ifdef MHD
+   real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
+   RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
+
+// Perpendicular velocity (in B-frame, gas velocity only)
+   real v1_B = g_ConVar_In[MOMX][idx_fc] / rho;
+   real v2_B = g_ConVar_In[MOMY][idx_fc] / rho;
+   real v3_B = g_ConVar_In[MOMZ][idx_fc] / rho;
+   RotateVec( sint, cost, sinp, cosp, v1_B, v2_B, v3_B );
+
+   const real ec_source = v2_B * dpcdy_B + v3_B * dpcdz_B;
+   new_ec += dt_source * ec_source;
+#  endif
+
+// 14. Floor CR energy
+   if ( new_ec < TINY_NUMBER )
+      new_ec = ec_old;
+
+// 15. No back-reaction to gas at half-step (only at full-step)
+
+// 16. Update CR fields
+   OneCell[CR_E ] = new_ec;
+   OneCell[CR_F1] = newfr1;
+   OneCell[CR_F2] = newfr2;
+   OneCell[CR_F3] = newfr3;
 
 } // FUNCTION : CR_TwoMomentSource_HalfStep
 

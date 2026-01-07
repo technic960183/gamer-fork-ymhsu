@@ -149,6 +149,26 @@ void SetParameter()
 
 
 //-------------------------------------------------------------------------------------------------------
+// Function    :  CR_TriangularProfile_Ec
+// Description :  Compute CR energy density for the triangular profile
+//
+// Note        :  1. This is the analytical formula for Ec at a given position
+//                2. Ec = 2 - |r - center| for |r - center| < 1, else Ec = 1
+//
+// Parameter   :  r      : Position along streaming direction
+//                center : Center of the triangular profile
+//
+// Return      :  CR energy density (Ec)
+//-------------------------------------------------------------------------------------------------------
+static double CR_TriangularProfile_Ec( const double r, const double center )
+{
+   const double d = std::abs( r - center );
+   return (d < 1.0) ? (2.0 - d) : 1.0;
+}
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    :  SetGridIC
 // Description :  Set the problem-specific initial condition on grids
 //
@@ -214,6 +234,66 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
    fluid[CR_F1] = cr_F1;
    fluid[CR_F2] = cr_F2;
    fluid[CR_F3] = cr_F3;
+
+// set ADV_* fields for streaming
+// These are auxiliary fields needed for the CR streaming source term
+// Note: The initial values are computed from the initial B field and grad(Pc)
+//       For the triangular profile: dPc/dr = ±1/3 for d < 1, else 0
+//       B field is uniform along streaming direction with magnitude 1
+//       Alfven velocity: v_A = B / sqrt(rho) = 1 / sqrt(1) = 1
+
+   const double B_field = 1.0;   // uniform B field magnitude
+   const double inv_sqrt_rho = 1.0 / std::sqrt(Dens);
+   const double va = B_field * inv_sqrt_rho;   // Alfven velocity magnitude
+
+// compute grad(Pc) using NUMERICAL gradient to match Athena++
+// Athena++ uses: dprdx = (Ec[i+1] - Ec[i-1]) / 3.0 / distance
+// where distance = 0.5*(cwidth(i-1) + cwidth(i+1)) + cwidth(i) ≈ 2*dx for uniform grid
+   const double dh = amr->dh[lv];  // grid spacing at this level
+   const double center = amr->BoxCenter[CR_Streaming_Dir];
+   
+// Compute Ec at neighbor positions along streaming direction
+   double r_plus, r_minus;
+   switch ( CR_Streaming_Dir )
+   {
+      case 0: r_plus = x + dh; r_minus = x - dh; break;
+      case 1: r_plus = y + dh; r_minus = y - dh; break;
+      case 2: r_plus = z + dh; r_minus = z - dh; break;
+   }
+   
+   const double Ec_plus  = CR_TriangularProfile_Ec( r_plus,  center );
+   const double Ec_minus = CR_TriangularProfile_Ec( r_minus, center );
+   
+// Numerical gradient matching Athena++: distance = 2*dx for uniform grid
+   const double distance = 2.0 * dh;
+   const double dPc_dr = (Ec_plus - Ec_minus) / 3.0 / distance;
+
+// B dot grad(Pc) for uniform B along streaming direction
+   const double b_grad_pc = B_field * dPc_dr;
+
+// streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
+// In 1D along streaming direction: v_adv = -sign(b_grad_pc) * va
+   double dpc_sign = 0.0;
+   if (b_grad_pc > TINY_NUMBER)       dpc_sign = 1.0;
+   else if (-b_grad_pc > TINY_NUMBER) dpc_sign = -1.0;
+
+   const double v_adv = -va * dpc_sign;
+
+// streaming opacity: sigma_adv = |B dot grad Pc| / (|B| * va * (4/3) * (1/vmax) * Ec)
+// Note: Athena++ uses (1.0 + 1.0/3.0) = 4/3, which is the same
+   double sigma_adv;
+   const double max_opacity = 1.0e20;
+   if (va > TINY_NUMBER && cr_E > TINY_NUMBER) {
+      sigma_adv = std::abs(b_grad_pc) / (B_field * va * (1.0 + 1.0/3.0) * (1.0/CR_VMAX) * cr_E);
+   } else {
+      sigma_adv = max_opacity;
+   }
+
+// set ADV_* fields
+   fluid[ADV_SIGMA] = sigma_adv;
+   fluid[ADV_VX] = (CR_Streaming_Dir == 0) ? v_adv : 0.0;
+   fluid[ADV_VY] = (CR_Streaming_Dir == 1) ? v_adv : 0.0;
+   fluid[ADV_VZ] = (CR_Streaming_Dir == 2) ? v_adv : 0.0;
 
 // set the output array
    fluid[DENS] = Dens;

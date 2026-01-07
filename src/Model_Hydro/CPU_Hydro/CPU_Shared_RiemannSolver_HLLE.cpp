@@ -680,14 +680,28 @@ void Hydro_RiemannSolver_HLLE( const int XYZ, real Flux_Out[], const real L_In[]
    {
       const real vx = Flux_Out[FLUX_DENS]*_RhoL;
 
-      for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)  Flux_Out[v] = L[v]*vx;
+      for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)
+      {
+#        ifdef CR_STREAMING
+//       skip CR streaming fields (ADV_VZ to CR_E) - they use their own flux calculation
+         // if ( v >= ADV_VZ  &&  v <= CR_E )   continue;
+#        endif
+         Flux_Out[v] = L[v]*vx;
+      }
    }
 
    else
    {
       const real vx = Flux_Out[FLUX_DENS]*_RhoR;
 
-      for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)  Flux_Out[v] = R[v]*vx;
+      for (int v=NCOMP_FLUID; v<NCOMP_TOTAL; v++)
+      {
+#        ifdef CR_STREAMING
+//       skip CR streaming fields (ADV_VZ to CR_E) - they use their own flux calculation
+         // if ( v >= ADV_VZ  &&  v <= CR_E )   continue;
+#        endif
+         Flux_Out[v] = R[v]*vx;
+      }
    }
 #  endif
 

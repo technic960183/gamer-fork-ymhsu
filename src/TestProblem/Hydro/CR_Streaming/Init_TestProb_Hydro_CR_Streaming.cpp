@@ -215,6 +215,53 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
    fluid[CR_F2] = cr_F2;
    fluid[CR_F3] = cr_F3;
 
+// set ADV_* fields for streaming
+// These are auxiliary fields needed for the CR streaming source term
+// Note: The initial values are computed from the initial B field and grad(Pc)
+//       For the triangular profile: dPc/dr = ±1/3 for d < 1, else 0
+//       B field is uniform along streaming direction with magnitude 1
+//       Alfven velocity: v_A = B / sqrt(rho) = 1 / sqrt(1) = 1
+
+   const double B_field = 1.0;   // uniform B field magnitude
+   const double inv_sqrt_rho = 1.0 / std::sqrt(Dens);
+   const double va = B_field * inv_sqrt_rho;   // Alfven velocity magnitude
+
+// compute grad(Pc) = (1/3) * grad(Ec) based on triangular profile
+// For triangular profile centered at box center:
+//   Ec = 2 - d  for d < 1
+//   Ec = 1      for d >= 1
+// So dEc/dr = -sign(r - center) for d < 1, and 0 for d >= 1
+   double dPc_dr = 0.0;
+   if (d < 1.0) {
+      dPc_dr = (r < amr->BoxCenter[CR_Streaming_Dir]) ? (1.0/3.0) : (-1.0/3.0);
+   }
+
+// B dot grad(Pc) for uniform B along streaming direction
+   const double b_grad_pc = B_field * dPc_dr;
+
+// streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
+// In 1D along streaming direction: v_adv = -sign(b_grad_pc) * va
+   double dpc_sign = 0.0;
+   if (b_grad_pc > 1.0e-15)       dpc_sign = 1.0;
+   else if (-b_grad_pc > 1.0e-15) dpc_sign = -1.0;
+
+   const double v_adv = -va * dpc_sign;
+
+// streaming opacity: sigma_adv = |B dot grad Pc| / (|B| * va * (4/3) * (1/vmax) * Ec)
+   double sigma_adv;
+   const double max_opacity = 1.0e20;
+   if (va > 1.0e-15 && cr_E > 1.0e-15) {
+      sigma_adv = std::abs(b_grad_pc) / (B_field * va * (4.0/3.0) * (1.0/CR_VMAX) * cr_E);
+   } else {
+      sigma_adv = max_opacity;
+   }
+
+// set ADV_* fields
+   fluid[ADV_SIGMA] = sigma_adv;
+   fluid[ADV_VX] = (CR_Streaming_Dir == 0) ? v_adv : 0.0;
+   fluid[ADV_VY] = (CR_Streaming_Dir == 1) ? v_adv : 0.0;
+   fluid[ADV_VZ] = (CR_Streaming_Dir == 2) ? v_adv : 0.0;
+
 // set the output array
    fluid[DENS] = Dens;
    fluid[MOMX] = MomX;

@@ -30,21 +30,7 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                             const real g_CC_B[][ CUBE(FLU_NXT) ],
                             const real dh, const MicroPhy_t *MicroPhy )
 {  
-   const real eddxx = (real)( 1.0 / 3.0 );
-   const real tau_asymptotic_lim = (real)1e-3;
-   const real CR_vmax = MicroPhy->CR_vmax;
 
-   //       1. get the diffusivity
-   real totsigma = MicroPhy->CR_sigma;
-   // if ( MicroPhy->CR_stream )
-   //    totsigma = 1 / ( 1 / totsigma + 1 / sigma_adv );
-   real taux = SQR( totsigma * dh ) / ( 2.0 * eddxx );
-   real diffv;
-   if ( taux < tau_asymptotic_lim )
-      diffv = SQRT( 1 - (real)0.5 * taux );
-   else
-      diffv = SQRT( ( (real)1.0 - EXP( -taux ) ) / taux );
-   real v_diff = CR_vmax * diffv * SQRT( eddxx ); // [TODO] We assume sigma_adv is constant for now
 
    const int  didx_cvar[3] = { 1, FLU_NXT, SQR(FLU_NXT) };
    const int  flux_offset  = 1;  // skip the additional fluxes along the transverse directions for computing the CT electric field
@@ -81,47 +67,9 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
 
       CGPU_LOOP( idx, size_i*size_j*size_k )
       {
-//       flux index
-         const int i_flux   = idx % size_i           + i_offset;
-         const int j_flux   = idx % size_ij / size_i + j_offset;
-         const int k_flux   = idx / size_ij          + k_offset;
-         const int idx_flux = IDX321( i_flux, j_flux, k_flux, N_HF_FLUX, N_HF_FLUX );
 
-//       conserved variable and cell-centered magnetic field index
-         const int i_cvar   = i_flux;
-         const int j_cvar   = j_flux;
-         const int k_cvar   = k_flux;
-         const int idx_cvar = IDX321( i_cvar, j_cvar, k_cvar, FLU_NXT, FLU_NXT );
-
-//       face-centered magnetic field index
-         const int idx_fc_B = IDX321( i_cvar, j_cvar, k_cvar, sizeB_i, sizeB_j ) + stride_fc_B;
-
-         const real vl = g_Flux_Half[d][FLUX_DENS][ idx_flux ] / g_ConVar[DENS][ idx_cvar ];
-         const real vr = g_Flux_Half[d][FLUX_DENS][ idx_flux ] / g_ConVar[DENS][ idx_cvar + didx_cvar[d] ];
-         const real meanadv = (real)0.5 * (vl + vr);
-
-//       2. Slope limiter
-         const real meandiffv = v_diff;
-         const real al = FMIN(meanadv - meandiffv, vl - v_diff);
-         const real ar = FMAX(meanadv + meandiffv, vr + v_diff);
-         const real ar_limited = FMIN(ar, CR_vmax * SQRT(eddxx));
-         const real al_limited = FMAX(al, -CR_vmax * SQRT(eddxx));
-         const real bp = (ar_limited > 0.0) ? ar_limited : 0.0;
-         const real bm = (al_limited < 0.0) ? al_limited : 0.0;
-
-//       3. Compute L/R fluxes along lines
-         real fl_e = CR_vmax * g_ConVar[CR_F1][idx_cvar] - bm * g_ConVar[CR_E][idx_cvar];
-         real fr_e = CR_vmax * g_ConVar[CR_F1][idx_cvar + didx_cvar[d]] - bp * g_ConVar[CR_E][idx_cvar + didx_cvar[d]];
-         real fl_f1 = CR_vmax * eddxx * g_ConVar[CR_E][idx_cvar] - bm * g_ConVar[CR_F1][idx_cvar];
-         real fr_f1 = CR_vmax * eddxx * g_ConVar[CR_E][idx_cvar + didx_cvar[d]] - bp * g_ConVar[CR_F1][idx_cvar + didx_cvar[d]];
-         // [TODO] f2 and f3
-
-         real tmp = 0.0;
-         if (FABS(bp - bm) > TINY_NUMBER)
-            tmp = 0.5 * (bp + bm) / (bp - bm);
-
-         g_Flux_Half[d][CR_E][ idx_flux ] = (real)0.5 * (fl_e + fr_e) + (fl_e - fr_e) * tmp;
-         g_Flux_Half[d][CR_F1][ idx_flux ] = (real)0.5 * (fl_f1 + fr_f1) + (fl_f1 - fr_f1) * tmp;
+         //g_Flux_Half[d][CR_E][ idx_flux ] = (real)0.5 * (fl_e + fr_e) + (fl_e - fr_e) * tmp;
+         //g_Flux_Half[d][CR_F1][ idx_flux ] = (real)0.5 * (fl_f1 + fr_f1) + (fl_f1 - fr_f1) * tmp;
          
       } // CGPU_LOOP( idx, size_i*size_j*size_k )
    } // for (int d=0; d<3; d++)

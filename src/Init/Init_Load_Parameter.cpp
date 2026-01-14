@@ -297,6 +297,7 @@ void Init_Load_Parameter()
    ReadPara->Add( "CR_STREAM",                  &CR_STREAM,                       true,            Useless_bool,  Useless_bool   );
    ReadPara->Add( "CR_VMAX",                    &CR_VMAX,                         1e2,             0.0,           NoMax_double   );
    ReadPara->Add( "CR_SIGMA",                   &CR_SIGMA,                        1e8,             0.0,           NoMax_double   );
+   ReadPara->Add( "CR_MAX_OPACITY",             &CR_MAX_OPACITY,                  1e10,            0.0,           NoMax_double   );
 # endif
 
 // fluid solvers in HYDRO

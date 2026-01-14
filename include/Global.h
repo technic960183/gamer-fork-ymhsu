@@ -402,6 +402,7 @@ extern bool   CR_SOURCE;
 extern bool   CR_STREAM;
 extern double CR_VMAX;
 extern double CR_SIGMA;
+extern double CR_MAX_OPACITY;
 #endif
 
 

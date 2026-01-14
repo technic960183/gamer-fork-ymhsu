@@ -374,6 +374,7 @@ bool CR_SOURCE;
 bool CR_STREAM;
 double CR_VMAX;
 double CR_SIGMA;
+double CR_MAX_OPACITY;
 #endif
 
 

@@ -96,29 +96,6 @@ static void InvRotateVec( const real sint, const real cost,
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    : MC_limiter
-// Description : Monotonized central (MC) slope limiter
-//
-// Note        : 1. Returns limited slope from two input slopes
-//
-// Parameter   : a, b : two input slopes
-//
-// Return      : limited slope
-//-------------------------------------------------------------------------------------------------------
-GPU_DEVICE
-static real MC_limiter( const real a, const real b )
-{
-   const real c = (real)0.5 * ( a + b );
-   const real d = (real)2.0 * ( ( FABS(a) < FABS(b) ) ? a : b );
-   const real s = ( a*b > (real)0.0 ) ? (real)1.0 : (real)0.0;
-
-   return s * ( ( FABS(c) < FABS(d) ) ? c : d );
-
-} // FUNCTION : MC_limiter
-
-
-
-//-------------------------------------------------------------------------------------------------------
 // Function    : CR_ComputeBFieldAngles
 // Description : Compute the rotation angles from B field direction
 //
@@ -364,30 +341,26 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          real sint, cost, sinp, cosp;
          CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
 
-//       5. compute grad(Pc) using MC limiter at the interface
+//       5. compute grad(Pc) using central difference at cell centers, averaged to interface
+//          Following Athena++ approach: gradient at cell center i = (Ec[i+1] - Ec[i-1]) / (2*dh) / 3.0
+//          Then average left and right cell-center gradients to get interface gradient
          real dPc_dx, dPc_dy, dPc_dz;
-         real al, bl, ar, br;
+         real diff_L, diff_R;
 
-//       x direction gradient
-         al = g_ConVar[CR_E][idx_L] - g_ConVar[CR_E][idx_L - didx_cvar[0]];
-         bl = g_ConVar[CR_E][idx_L + didx_cvar[0]] - g_ConVar[CR_E][idx_L];
-         ar = g_ConVar[CR_E][idx_R] - g_ConVar[CR_E][idx_R - didx_cvar[0]];
-         br = g_ConVar[CR_E][idx_R + didx_cvar[0]] - g_ConVar[CR_E][idx_R];
-         dPc_dx = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+//       x direction gradient: central difference at cell centers, averaged to interface
+         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[0]] - g_ConVar[CR_E][idx_L - didx_cvar[0]];
+         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[0]] - g_ConVar[CR_E][idx_R - didx_cvar[0]];
+         dPc_dx = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       y direction gradient
-         al = g_ConVar[CR_E][idx_L] - g_ConVar[CR_E][idx_L - didx_cvar[1]];
-         bl = g_ConVar[CR_E][idx_L + didx_cvar[1]] - g_ConVar[CR_E][idx_L];
-         ar = g_ConVar[CR_E][idx_R] - g_ConVar[CR_E][idx_R - didx_cvar[1]];
-         br = g_ConVar[CR_E][idx_R + didx_cvar[1]] - g_ConVar[CR_E][idx_R];
-         dPc_dy = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[1]] - g_ConVar[CR_E][idx_L - didx_cvar[1]];
+         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[1]] - g_ConVar[CR_E][idx_R - didx_cvar[1]];
+         dPc_dy = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       z direction gradient
-         al = g_ConVar[CR_E][idx_L] - g_ConVar[CR_E][idx_L - didx_cvar[2]];
-         bl = g_ConVar[CR_E][idx_L + didx_cvar[2]] - g_ConVar[CR_E][idx_L];
-         ar = g_ConVar[CR_E][idx_R] - g_ConVar[CR_E][idx_R - didx_cvar[2]];
-         br = g_ConVar[CR_E][idx_R + didx_cvar[2]] - g_ConVar[CR_E][idx_R];
-         dPc_dz = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[2]] - g_ConVar[CR_E][idx_L - didx_cvar[2]];
+         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[2]] - g_ConVar[CR_E][idx_R - didx_cvar[2]];
+         dPc_dz = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       6. compute B dot grad(Pc)
          const real Bsq = SQR(Bx_face) + SQR(By_face) + SQR(Bz_face);
@@ -641,30 +614,26 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          real sint, cost, sinp, cosp;
          CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
 
-//       5. compute grad(Pc) using MC limiter at the interface
+//       5. compute grad(Pc) using central difference at cell centers, averaged to interface
+//          Following Athena++ approach: gradient at cell center i = (Ec[i+1] - Ec[i-1]) / (2*dh) / 3.0
+//          Then average left and right cell-center gradients to get interface gradient
          real dPc_dx, dPc_dy, dPc_dz;
-         real al, bl, ar, br;
+         real diff_L, diff_R;
 
-//       x direction gradient
-         al = g_PriVar_Half[CR_E][idx_L] - g_PriVar_Half[CR_E][idx_L - didx_pvar[0]];
-         bl = g_PriVar_Half[CR_E][idx_L + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_L];
-         ar = g_PriVar_Half[CR_E][idx_R] - g_PriVar_Half[CR_E][idx_R - didx_pvar[0]];
-         br = g_PriVar_Half[CR_E][idx_R + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_R];
-         dPc_dx = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+//       x direction gradient: central difference at cell centers, averaged to interface
+         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[0]];
+         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[0]];
+         dPc_dx = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       y direction gradient
-         al = g_PriVar_Half[CR_E][idx_L] - g_PriVar_Half[CR_E][idx_L - didx_pvar[1]];
-         bl = g_PriVar_Half[CR_E][idx_L + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_L];
-         ar = g_PriVar_Half[CR_E][idx_R] - g_PriVar_Half[CR_E][idx_R - didx_pvar[1]];
-         br = g_PriVar_Half[CR_E][idx_R + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_R];
-         dPc_dy = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[1]];
+         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[1]];
+         dPc_dy = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       z direction gradient
-         al = g_PriVar_Half[CR_E][idx_L] - g_PriVar_Half[CR_E][idx_L - didx_pvar[2]];
-         bl = g_PriVar_Half[CR_E][idx_L + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_L];
-         ar = g_PriVar_Half[CR_E][idx_R] - g_PriVar_Half[CR_E][idx_R - didx_pvar[2]];
-         br = g_PriVar_Half[CR_E][idx_R + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_R];
-         dPc_dz = MC_limiter( MC_limiter(al,bl), MC_limiter(ar,br) ) * _dh / (real)3.0;
+         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[2]];
+         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[2]];
+         dPc_dz = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
 
 //       6. compute B dot grad(Pc)
          const real Bsq = SQR(Bx_face) + SQR(By_face) + SQR(Bz_face);

@@ -135,6 +135,7 @@ CR_SOURCE                     0           # Include source feedback [0/1]
 CR_STREAM                     1           # Turn on streaming [0/1]
 CR_VMAX                       1e2         # Maximum velocity on the streaming direction
 CR_SIGMA                      1e8         # Diffusion coefficient
+CR_MAX_OPACITY                1e10        # Maximum opacity for cosmic-ray streaming [1e10] ##CR_STREAMING only##
 
 # fluid solver in HYDRO (MODEL==HYDRO only)
 GAMMA                         1.666666667 # ratio of specific heats (i.e., adiabatic index) [5.0/3.0] ##EOS_GAMMA ONLY##

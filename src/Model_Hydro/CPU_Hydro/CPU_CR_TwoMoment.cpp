@@ -6,7 +6,6 @@
 
 // global constants for CR streaming
 // --> will be moved to input parameters later
-static const real CR_MAX_OPACITY    = (real)1.0e20;   // max_opacity for diffusion (effectively infinite)
 static const real CR_TAU_ASYM_LIM   = (real)1.0e-3;   // optical depth limit for asymptotic expansion
 static const real CR_TAUFACT        = (real)1.0;      // tau factor for optical depth calculation
 static const int  CR_VEL_FLX_FLAG   = 0;              // flag to add CR sound speed to v_diff
@@ -151,6 +150,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 //               vmax        : effective speed of light
 //               sigma_adv   : output streaming opacity (parallel component)
 //               v_adv[3]    : output streaming velocity components
+//               MicroPhy    : Microphysics object containing CR_max_opacity
 //
 // Reference   : Athena++ src/cr/cr.cpp DefaultStreaming()
 //-------------------------------------------------------------------------------------------------------
@@ -158,7 +158,7 @@ GPU_DEVICE
 static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
                               const real Bx, const real By, const real Bz,
                               const real grad_pc[3], const real vmax,
-                              real &sigma_adv, real v_adv[3] )
+                              real &sigma_adv, real v_adv[3], const MicroPhy_t *MicroPhy )
 {
    const real invlim = (real)1.0 / vmax;
 
@@ -192,7 +192,7 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
    if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
       sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
    } else {
-      sigma_adv = CR_MAX_OPACITY;
+      sigma_adv = MicroPhy->CR_max_opacity;
    }
 
 } // FUNCTION : CR_UpdateStreaming_OneCell
@@ -221,7 +221,7 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
 //               out_offset   : Offset between flux cell index and output index
 //               in_offset    : Offset between flux cell index and input (g_CellVar) index
 //               dh           : Cell size
-//               MicroPhy     : Microphysics object containing vmax
+//               MicroPhy     : Microphysics object containing CR_vmax and CR_max_opacity
 //
 // Return      : Modified ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ in g_Output
 //-------------------------------------------------------------------------------------------------------
@@ -288,7 +288,7 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 //    call CR_UpdateStreaming_OneCell to compute new sigma_adv and v_adv
       real sigma_adv_new;
       real v_adv_new[3];
-      CR_UpdateStreaming_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
+      CR_UpdateStreaming_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new, MicroPhy );
 
 //    store updated values
       g_Output[ADV_SIGMA][idx_out] = sigma_adv_new;
@@ -424,7 +424,7 @@ void CR_UpdateOpacity( real *g_Output,
       if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
          sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
       } else {
-         sigma_adv = CR_MAX_OPACITY;
+         sigma_adv = MicroPhy->CR_max_opacity;
       }
 
 //    store updated values
@@ -455,6 +455,7 @@ void CR_UpdateOpacity( real *g_Output,
 //               vmax        : effective speed of light
 //               dh          : cell size
 //               fdir        : flux direction (0=x, 1=y, 2=z)
+//               MicroPhy    : Microphysics object containing CR_sigma and CR_max_opacity
 //
 // Return      : v_diff along the specified direction (fdir)
 //
@@ -464,11 +465,12 @@ GPU_DEVICE
 static real CR_ComputeVdiff( const real sigma_adv, 
                              const real Bx, const real By, const real Bz,
                              const real Ec, const real rho,
-                             const real vmax, const real dh, const int fdir )
+                             const real vmax, const real dh, const int fdir,
+                             const MicroPhy_t *MicroPhy )
 {
    const real edd = (real)1.0 / (real)3.0;
-   const real sigma_adv_perp = CR_MAX_OPACITY;
-   const real sigma_diff = 1e8;
+   const real sigma_adv_perp = MicroPhy->CR_max_opacity;
+   const real sigma_diff = MicroPhy->CR_sigma;
 
 // compute B-field angles for rotation
    real sint, cost, sinp, cosp;
@@ -750,8 +752,8 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
 //          vdiff_L is computed from LEFT cell's cell-centered data
 //          vdiff_R is computed from RIGHT cell's cell-centered data
 //          This matches Athena++ pattern: vdiff_l_(i) = v_diff[i-1], vdiff_r_(i) = v_diff[i]
-         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_L, rho_L, vmax, dh, d );
-         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_R, rho_R, vmax, dh, d );
+         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_L, rho_L, vmax, dh, d, MicroPhy );
+         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_R, rho_R, vmax, dh, d, MicroPhy );
 
 //       7. compute HLLE flux
          real flux_E, flux_F[3];
@@ -913,8 +915,8 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
          const real Ec_cc_R  = g_PriVar_Half[CR_E][idx_pvar_R];
          const real rho_cc_L = g_PriVar_Half[DENS][idx_pvar_L];
          const real rho_cc_R = g_PriVar_Half[DENS][idx_pvar_R];
-         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_cc_L, rho_cc_L, vmax, dh, d );
-         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_cc_R, rho_cc_R, vmax, dh, d );
+         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_cc_L, rho_cc_L, vmax, dh, d, MicroPhy );
+         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_cc_R, rho_cc_R, vmax, dh, d, MicroPhy );
 
 //       7. compute HLLE flux
          real flux_E, flux_F[3];
@@ -1012,7 +1014,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    const real v_adv_x = g_ConVar_In[ADV_VX][idx_fc];
    const real v_adv_y = g_ConVar_In[ADV_VY][idx_fc];
    const real v_adv_z = g_ConVar_In[ADV_VZ][idx_fc];
-   const real sigma_adv_perp = CR_MAX_OPACITY;
+   const real sigma_adv_perp = MicroPhy->CR_max_opacity;
 
 // Total velocity = gas velocity + streaming velocity
    real vtot1 = v1 + v_adv_x;
@@ -1036,7 +1038,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 #  endif
 
 // 10. Compute effective sigma (parallel combination of sigma_diff and sigma_adv)
-   const real sigma_diff = CR_MAX_OPACITY;
+   const real sigma_diff = MicroPhy->CR_sigma;
 
    const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
    const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
@@ -1221,7 +1223,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       const real v_adv_x = g_PriVar_Half[ADV_VX][idx_pvar];
       const real v_adv_y = g_PriVar_Half[ADV_VY][idx_pvar];
       const real v_adv_z = g_PriVar_Half[ADV_VZ][idx_pvar];
-      const real sigma_adv_perp = CR_MAX_OPACITY;
+      const real sigma_adv_perp = MicroPhy->CR_max_opacity;
 
 //    total velocity = gas velocity + streaming velocity
       real vtot1 = v1 + v_adv_x;
@@ -1248,7 +1250,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 #     endif
 
 //    10. compute effective sigma (parallel combination of sigma_diff and sigma_adv)
-      const real sigma_diff = CR_MAX_OPACITY;
+      const real sigma_diff = MicroPhy->CR_sigma;
 
       const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
       const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );

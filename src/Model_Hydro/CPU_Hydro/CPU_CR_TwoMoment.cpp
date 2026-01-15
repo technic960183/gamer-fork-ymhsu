@@ -134,6 +134,71 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 
 
 //-------------------------------------------------------------------------------------------------------
+// Function    : CR_UpdateOpacity
+// Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) from grad(Pc)
+//
+// Note        : 1. Based on Athena++ DefaultStreaming() in cr.cpp
+//               2. sigma_adv[0] is parallel to B, sigma_adv[1,2] are perpendicular (set to max_opacity)
+//               3. v_adv = -sign(B dot grad Pc) * v_Alfven
+//               4. This function should be called after flux calculation with grad_pc computed
+//                  from flux divergence, or at initialization with grad_pc from central differences
+//
+// Parameter   : Ec          : CR energy density
+//               rho         : gas density
+//               Bx, By, Bz  : magnetic field components
+//               grad_pc[3]  : gradient of CR pressure (dPc/dx, dPc/dy, dPc/dz)
+//               vmax        : effective speed of light
+//               sigma_adv   : output streaming opacity (parallel component)
+//               v_adv[3]    : output streaming velocity components
+//
+// Reference   : Athena++ src/cr/cr.cpp DefaultStreaming()
+//-------------------------------------------------------------------------------------------------------
+GPU_DEVICE
+static void CR_UpdateOpacity( const real Ec, const real rho,
+                              const real Bx, const real By, const real Bz,
+                              const real grad_pc[3], const real vmax,
+                              real &sigma_adv, real v_adv[3] )
+{
+   const real invlim = (real)1.0 / vmax;
+
+// compute B field magnitude and Alfven velocity
+   const real bsq  = SQR(Bx) + SQR(By) + SQR(Bz);
+   const real btot = SQRT( bsq );
+   const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
+   const real va = btot * inv_sqrt_rho;
+
+// compute B dot grad(Pc)
+   const real b_grad_pc = Bx * grad_pc[0] + By * grad_pc[1] + Bz * grad_pc[2];
+
+// determine sign of B dot grad(Pc)
+   real dpc_sign = (real)0.0;
+   if ( b_grad_pc > TINY_NUMBER )
+      dpc_sign = (real)1.0;
+   else if ( -b_grad_pc > TINY_NUMBER )
+      dpc_sign = (real)-1.0;
+
+// compute streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
+   const real va1 = Bx * inv_sqrt_rho;
+   const real va2 = By * inv_sqrt_rho;
+   const real va3 = Bz * inv_sqrt_rho;
+
+   v_adv[0] = -va1 * dpc_sign;
+   v_adv[1] = -va2 * dpc_sign;
+   v_adv[2] = -va3 * dpc_sign;
+
+// compute streaming opacity (parallel to B)
+// sigma_adv = |B dot grad Pc| / (|B| * v_A * (4/3) * (1/vmax) * Ec)
+   if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
+      sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
+   } else {
+      sigma_adv = CR_MAX_OPACITY;
+   }
+
+} // FUNCTION : CR_UpdateOpacity
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    : CR_ComputeHLLEFlux
 // Description : Compute HLLE flux for CR variables at a cell interface
 //
@@ -341,57 +406,17 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          real sint, cost, sinp, cosp;
          CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
 
-//       5. compute grad(Pc) using central difference at cell centers, averaged to interface
-//          Following Athena++ approach: gradient at cell center i = (Ec[i+1] - Ec[i-1]) / (2*dh) / 3.0
-//          Then average left and right cell-center gradients to get interface gradient
-         real dPc_dx, dPc_dy, dPc_dz;
-         real diff_L, diff_R;
+//       5. READ sigma_adv from stored fields (computed at init or previous flux call)
+//          Average left and right cell values to get interface value
+//          This follows the Python/Athena++ pattern where cr_flux() READS sigma_adv at the start
+         const real sigma_adv_L = g_ConVar[ADV_SIGMA][idx_L];
+         const real sigma_adv_R = g_ConVar[ADV_SIGMA][idx_R];
+         const real sigma_adv_para = (real)0.5 * ( sigma_adv_L + sigma_adv_R );
 
-//       x direction gradient: central difference at cell centers, averaged to interface
-         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[0]] - g_ConVar[CR_E][idx_L - didx_cvar[0]];
-         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[0]] - g_ConVar[CR_E][idx_R - didx_cvar[0]];
-         dPc_dx = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       y direction gradient
-         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[1]] - g_ConVar[CR_E][idx_L - didx_cvar[1]];
-         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[1]] - g_ConVar[CR_E][idx_R - didx_cvar[1]];
-         dPc_dy = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       z direction gradient
-         diff_L = g_ConVar[CR_E][idx_L + didx_cvar[2]] - g_ConVar[CR_E][idx_L - didx_cvar[2]];
-         diff_R = g_ConVar[CR_E][idx_R + didx_cvar[2]] - g_ConVar[CR_E][idx_R - didx_cvar[2]];
-         dPc_dz = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       6. compute B dot grad(Pc)
-         const real Bsq = SQR(Bx_face) + SQR(By_face) + SQR(Bz_face);
-         const real Btot = SQRT( Bsq );
-         const real b_grad_pc = Bx_face * dPc_dx + By_face * dPc_dy + Bz_face * dPc_dz;
-
-//       7. compute Alfven velocity at interface
-         const real rho_face = (real)0.5 * ( rho_L + rho_R );
-         const real inv_sqrt_rho = (real)1.0 / SQRT( rho_face );
-         const real va = Btot * inv_sqrt_rho;
-
-//       8. compute streaming velocity v_adv = -sign(B dot grad Pc) * v_Alfven
-         real dpc_sign = (real)0.0;
-         if ( b_grad_pc > TINY_NUMBER )       dpc_sign = (real)1.0;
-         else if ( -b_grad_pc > TINY_NUMBER ) dpc_sign = (real)-1.0;
-
-         const real v_adv_x = -Bx_face * inv_sqrt_rho * dpc_sign;
-         const real v_adv_y = -By_face * inv_sqrt_rho * dpc_sign;
-         const real v_adv_z = -Bz_face * inv_sqrt_rho * dpc_sign;
-
-//       9. compute streaming opacity sigma_adv
+//       6. get CR parameters
          const real vmax   = MicroPhy->CR_vmax;
-         const real invlim = (real)1.0 / vmax;
          const real Ec_face = (real)0.5 * ( Ec_L + Ec_R );
-
-         real sigma_adv_para;
-         if ( va > TINY_NUMBER && Ec_face > TINY_NUMBER ) {
-            sigma_adv_para = FABS(b_grad_pc) / ( Btot * va * ((real)4.0/(real)3.0) * invlim * Ec_face );
-         } else {
-            sigma_adv_para = CR_MAX_OPACITY;
-         }
+         const real rho_face = (real)0.5 * ( rho_L + rho_R );
 
 //       perpendicular opacities are max_opacity
          const real sigma_adv_perp = CR_MAX_OPACITY;
@@ -477,17 +502,72 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          g_Flux_Half[d][CR_F2][idx_flux] = flux_F[1];
          g_Flux_Half[d][CR_F3][idx_flux] = flux_F[2];
 
-//       17. store v_adv and sigma_adv to auxiliary fields for source term use (only store once)
-//           Note: we use ADV_VX/VY/VZ for streaming velocity and ADV_SIGMA for parallel sigma
-//           These need to be stored at cell centers, not interfaces
-//           For half-step, we store to the left cell
-         if ( d == 0 ) {
-            // store to left cell (idx_L corresponds to idx_cvar)
-            // Note: This is a simplified approach - storing interface values to cells
-         }
-
       } // CGPU_LOOP( idx, size_i*size_j*size_k )
    } // for (int d=0; d<3; d++)
+
+
+// ============================================================================
+// 17. UPDATE sigma_adv and v_adv from flux divergence (after all fluxes computed)
+//     This follows the Python/Athena++ pattern: cr_flux() WRITES sigma_adv at the end
+//     using grad_pc computed from flux divergence: grad_pc = div(F_cr) / vmax
+// ============================================================================
+   const real vmax = MicroPhy->CR_vmax;
+   const int  cell_offset = 1;  // skip boundary cells
+
+// loop over interior cells to update opacity
+   const int cell_size_i = N_HF_FLUX - 2*cell_offset;
+   const int cell_size_j = N_HF_FLUX - 2*cell_offset;
+   const int cell_size_k = N_HF_FLUX - 2*cell_offset;
+   const int cell_size_ij = cell_size_i * cell_size_j;
+
+   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+   {
+      const int i_cell = idx_cell % cell_size_i            + cell_offset;
+      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
+      const int k_cell = idx_cell / cell_size_ij           + cell_offset;
+      const int idx_flux_cell = IDX321( i_cell, j_cell, k_cell, N_HF_FLUX, N_HF_FLUX );
+
+//    conserved variable index (for reading rho, Bcc, Ec and writing ADV_*)
+      const int idx_cvar_cell = IDX321( i_cell, j_cell, k_cell, FLU_NXT, FLU_NXT );
+
+//    compute grad_pc from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
+//    In GAMER MHD convention: flux[idx] is the RIGHT face of cell idx (face i+1/2)
+//    So for cell at idx: right face = flux[idx], left face = flux[idx-1]
+//    Divergence = (right_flux - left_flux) / dx = (flux[idx] - flux[idx-1]) / dx
+      real grad_pc[3];
+
+//    x-direction: use x-flux of CRF1
+      grad_pc[0] = ( g_Flux_Half[0][CR_F1][idx_flux_cell] - g_Flux_Half[0][CR_F1][idx_flux_cell - 1] ) * _dh / vmax;
+
+//    y-direction: use y-flux of CRF2
+      grad_pc[1] = ( g_Flux_Half[1][CR_F2][idx_flux_cell] - g_Flux_Half[1][CR_F2][idx_flux_cell - N_HF_FLUX] ) * _dh / vmax;
+
+//    z-direction: use z-flux of CRF3
+      grad_pc[2] = ( g_Flux_Half[2][CR_F3][idx_flux_cell] - g_Flux_Half[2][CR_F3][idx_flux_cell - SQR(N_HF_FLUX)] ) * _dh / vmax;
+
+//    get cell-centered values for updating opacity
+      const real Ec  = g_ConVar[CR_E ][idx_cvar_cell];
+      const real rho = g_ConVar[DENS][idx_cvar_cell];
+      const real Bx  = g_CC_B[0][idx_cvar_cell];
+      const real By  = g_CC_B[1][idx_cvar_cell];
+      const real Bz  = g_CC_B[2][idx_cvar_cell];
+
+//    call CR_UpdateOpacity to compute new sigma_adv and v_adv
+      real sigma_adv_new;
+      real v_adv_new[3];
+      CR_UpdateOpacity( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
+
+//    store updated values to auxiliary fields
+//    Note: g_ConVar is declared const, but we need to modify ADV_* fields
+//          This requires changing the function signature or using a separate output array
+//          For now, we cast away const (not ideal but necessary for current structure)
+      real (*g_ConVar_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_ConVar);
+      g_ConVar_mod[ADV_SIGMA][idx_cvar_cell] = sigma_adv_new;
+      g_ConVar_mod[ADV_VX   ][idx_cvar_cell] = v_adv_new[0];
+      g_ConVar_mod[ADV_VY   ][idx_cvar_cell] = v_adv_new[1];
+      g_ConVar_mod[ADV_VZ   ][idx_cvar_cell] = v_adv_new[2];
+
+   } // CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
 
 
 } // FUMCTION : CR_TwoMomentFlux_HalfStep
@@ -614,53 +694,17 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          real sint, cost, sinp, cosp;
          CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
 
-//       5. compute grad(Pc) using central difference at cell centers, averaged to interface
-//          Following Athena++ approach: gradient at cell center i = (Ec[i+1] - Ec[i-1]) / (2*dh) / 3.0
-//          Then average left and right cell-center gradients to get interface gradient
-         real dPc_dx, dPc_dy, dPc_dz;
-         real diff_L, diff_R;
+//       5. READ sigma_adv from stored fields (computed at init or previous flux call)
+//          Average left and right cell values to get interface value
+//          This follows the Python/Athena++ pattern where cr_flux() READS sigma_adv at the start
+         const real sigma_adv_L = g_PriVar_Half[ADV_SIGMA][idx_L];
+         const real sigma_adv_R = g_PriVar_Half[ADV_SIGMA][idx_R];
+         const real sigma_adv_para = (real)0.5 * ( sigma_adv_L + sigma_adv_R );
 
-//       x direction gradient: central difference at cell centers, averaged to interface
-         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[0]];
-         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[0]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[0]];
-         dPc_dx = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       y direction gradient
-         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[1]];
-         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[1]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[1]];
-         dPc_dy = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       z direction gradient
-         diff_L = g_PriVar_Half[CR_E][idx_L + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_L - didx_pvar[2]];
-         diff_R = g_PriVar_Half[CR_E][idx_R + didx_pvar[2]] - g_PriVar_Half[CR_E][idx_R - didx_pvar[2]];
-         dPc_dz = (real)0.5 * (diff_L + diff_R) * _dh / (real)6.0;
-
-//       6. compute B dot grad(Pc)
-         const real Bsq = SQR(Bx_face) + SQR(By_face) + SQR(Bz_face);
-         const real Btot = SQRT( Bsq );
-         const real b_grad_pc = Bx_face * dPc_dx + By_face * dPc_dy + Bz_face * dPc_dz;
-
-//       7. compute Alfven velocity at interface
-         const real rho_face = (real)0.5 * ( rho_L + rho_R );
-         const real inv_sqrt_rho = (real)1.0 / SQRT( rho_face );
-         const real va = Btot * inv_sqrt_rho;
-
-//       8. compute streaming velocity v_adv = -sign(B dot grad Pc) * v_Alfven
-         real dpc_sign = (real)0.0;
-         if ( b_grad_pc > TINY_NUMBER )       dpc_sign = (real)1.0;
-         else if ( -b_grad_pc > TINY_NUMBER ) dpc_sign = (real)-1.0;
-
-//       9. compute streaming opacity sigma_adv
+//       6. get CR parameters
          const real vmax   = MicroPhy->CR_vmax;
-         const real invlim = (real)1.0 / vmax;
          const real Ec_face = (real)0.5 * ( Ec_L + Ec_R );
-
-         real sigma_adv_para;
-         if ( va > TINY_NUMBER && Ec_face > TINY_NUMBER ) {
-            sigma_adv_para = FABS(b_grad_pc) / ( Btot * va * ((real)4.0/(real)3.0) * invlim * Ec_face );
-         } else {
-            sigma_adv_para = CR_MAX_OPACITY;
-         }
+         const real rho_face = (real)0.5 * ( rho_L + rho_R );
 
 //       perpendicular opacities are max_opacity
          const real sigma_adv_perp = CR_MAX_OPACITY;
@@ -748,6 +792,70 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       } // CGPU_LOOP( idx, size_i*size_j*size_k )
    } // for (int d=0; d<3; d++)
 
+
+// ============================================================================
+// 17. UPDATE sigma_adv and v_adv from flux divergence (after all fluxes computed)
+//     This follows the Python/Athena++ pattern: cr_flux() WRITES sigma_adv at the end
+//     using grad_pc computed from flux divergence: grad_pc = div(F_cr) / vmax
+// ============================================================================
+   const real vmax = MicroPhy->CR_vmax;
+   const int  cell_offset = 1;  // skip boundary cells
+
+// loop over interior cells to update opacity
+   const int cell_size_i = NFlux - 2*cell_offset;
+   const int cell_size_j = NFlux - 2*cell_offset;
+   const int cell_size_k = NFlux - 2*cell_offset;
+   const int cell_size_ij = cell_size_i * cell_size_j;
+
+   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+   {
+      const int i_cell = idx_cell % cell_size_i            + cell_offset;
+      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
+      const int k_cell = idx_cell / cell_size_ij           + cell_offset;
+      const int idx_flux_cell = IDX321( i_cell, j_cell, k_cell, NFlux, NFlux );
+
+//    primitive variable index (with half_offset)
+      const int i_pvar = i_cell + half_offset;
+      const int j_pvar = j_cell + half_offset;
+      const int k_pvar = k_cell + half_offset;
+      const int idx_pvar_cell = IDX321( i_pvar, j_pvar, k_pvar, N_HF_VAR, N_HF_VAR );
+
+//    compute grad_pc from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
+//    In GAMER MHD convention: flux[idx] is the RIGHT face of cell idx
+//    Divergence = (flux[idx] - flux[idx-1]) / dx
+      real grad_pc[3];
+
+//    x-direction: use x-flux of CRF1
+      grad_pc[0] = ( g_FC_Flux[0][CR_F1][idx_flux_cell] - g_FC_Flux[0][CR_F1][idx_flux_cell - 1] ) * _dh / vmax;
+
+//    y-direction: use y-flux of CRF2
+      grad_pc[1] = ( g_FC_Flux[1][CR_F2][idx_flux_cell] - g_FC_Flux[1][CR_F2][idx_flux_cell - NFlux] ) * _dh / vmax;
+
+//    z-direction: use z-flux of CRF3
+      grad_pc[2] = ( g_FC_Flux[2][CR_F3][idx_flux_cell] - g_FC_Flux[2][CR_F3][idx_flux_cell - SQR(NFlux)] ) * _dh / vmax;
+
+//    get cell-centered values for updating opacity
+      const real Ec  = g_PriVar_Half[CR_E ][idx_pvar_cell];
+      const real rho = g_PriVar_Half[DENS][idx_pvar_cell];
+      const real Bx  = g_PriVar_Half[MAG_OFFSET+0][idx_pvar_cell];
+      const real By  = g_PriVar_Half[MAG_OFFSET+1][idx_pvar_cell];
+      const real Bz  = g_PriVar_Half[MAG_OFFSET+2][idx_pvar_cell];
+
+//    call CR_UpdateOpacity to compute new sigma_adv and v_adv
+      real sigma_adv_new;
+      real v_adv_new[3];
+      CR_UpdateOpacity( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
+
+//    store updated values to auxiliary fields in primitive array
+//    Note: g_PriVar_Half is declared const, but we need to modify ADV_* fields
+      real (*g_PriVar_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_PriVar_Half);
+      g_PriVar_mod[ADV_SIGMA][idx_pvar_cell] = sigma_adv_new;
+      g_PriVar_mod[ADV_VX   ][idx_pvar_cell] = v_adv_new[0];
+      g_PriVar_mod[ADV_VY   ][idx_pvar_cell] = v_adv_new[1];
+      g_PriVar_mod[ADV_VZ   ][idx_pvar_cell] = v_adv_new[2];
+
+   } // CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+
 } // FUNCTION : CR_TwoMomentFlux_FullStep
 
 
@@ -792,7 +900,6 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 // CR parameters
    const real vmax   = MicroPhy->CR_vmax;
    const real invlim = (real)1.0 / vmax;
-   const real _dh    = (real)1.0 / dh;
 
 // Half-step uses dt_source = 0.5 * dt (matching Athena++ VL2 stage 1 with beta=0.5)
    const real dt_source = (real)0.5 * dt;
@@ -824,52 +931,23 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    real sint, cost, sinp, cosp;
    CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
 
-// 5. Compute grad(Pc) using central differences on the conserved CR energy
-//    Note: Pc = Ec/3, so grad(Pc) = grad(Ec)/3
-   const real dPc_dx = ( g_ConVar_In[CR_E][idx_fc + didx_fc[0]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[0]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dy = ( g_ConVar_In[CR_E][idx_fc + didx_fc[1]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[1]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dz = ( g_ConVar_In[CR_E][idx_fc + didx_fc[2]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[2]] ) * (real)0.5 * _dh / (real)3.0;
-
-// 6. Compute B dot grad(Pc) and streaming velocity
-   const real Bsq = SQR(Bx) + SQR(By) + SQR(Bz);
-   const real Btot = SQRT( Bsq );
-   const real b_grad_pc = Bx * dPc_dx + By * dPc_dy + Bz * dPc_dz;
-
-// Alfven velocity
-   const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
-   const real va = Btot * inv_sqrt_rho;
-
-// Streaming velocity direction
-   real dpc_sign = (real)0.0;
-   if ( b_grad_pc > TINY_NUMBER )       dpc_sign = (real)1.0;
-   else if ( -b_grad_pc > TINY_NUMBER ) dpc_sign = (real)-1.0;
-
-// Streaming velocity components: v_adv = -sign(B dot grad Pc) * v_Alfven
-   const real v_adv_x = -Bx * inv_sqrt_rho * dpc_sign;
-   const real v_adv_y = -By * inv_sqrt_rho * dpc_sign;
-   const real v_adv_z = -Bz * inv_sqrt_rho * dpc_sign;
+// 5. READ sigma_adv and v_adv from stored fields (updated by flux function)
+//    This follows the Python/Athena++ pattern where add_source() READS sigma_adv/v_adv
+   const real sigma_adv_para = g_ConVar_In[ADV_SIGMA][idx_fc];
+   const real v_adv_x = g_ConVar_In[ADV_VX][idx_fc];
+   const real v_adv_y = g_ConVar_In[ADV_VY][idx_fc];
+   const real v_adv_z = g_ConVar_In[ADV_VZ][idx_fc];
+   const real sigma_adv_perp = CR_MAX_OPACITY;
 
 // Total velocity = gas velocity + streaming velocity
    real vtot1 = v1 + v_adv_x;
    real vtot2 = v2 + v_adv_y;
    real vtot3 = v3 + v_adv_z;
 
-// 7. Compute streaming opacity sigma_adv
-   real sigma_adv_para;
-   if ( va > TINY_NUMBER && ec > TINY_NUMBER ) {
-      sigma_adv_para = FABS(b_grad_pc) / ( Btot * va * ((real)4.0/(real)3.0) * invlim * ec );
-   } else {
-      sigma_adv_para = CR_MAX_OPACITY;
-   }
-   const real sigma_adv_perp = CR_MAX_OPACITY;
-
-// 8. Save original CR energy for floor check
+// 6. Save original CR energy for floor check
    const real ec_old = ec;
 
-// 9. Rotate all vectors to B-aligned frame
+// 7. Rotate all vectors to B-aligned frame
    real fr1 = fc1, fr2 = fc2, fr3 = fc3;
 
 #  ifdef MHD
@@ -941,7 +1019,16 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 
 // 13. Compute perpendicular heating term (ec_source)
 //     This is the work done by perpendicular gas flow: v_perp · grad(Pc)
+//     Note: We need to compute grad(Pc) locally for this term
 #  ifdef MHD
+   const real _dh = (real)1.0 / dh;
+   const real dPc_dx = ( g_ConVar_In[CR_E][idx_fc + didx_fc[0]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[0]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dy = ( g_ConVar_In[CR_E][idx_fc + didx_fc[1]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[1]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dz = ( g_ConVar_In[CR_E][idx_fc + didx_fc[2]] - 
+                         g_ConVar_In[CR_E][idx_fc - didx_fc[2]] ) * (real)0.5 * _dh / (real)3.0;
+
    real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
    RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
 
@@ -1003,8 +1090,6 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 {
    const int  didx_out[3]  = { 1, PS2, SQR(PS2) };
    const int  didx_pvar[3] = { 1, N_HF_VAR, SQR(N_HF_VAR) };
-   const int  didx_flux[3] = { 1, N_FL_FLUX, SQR(N_FL_FLUX) };
-   const real _dh          = (real)1.0 / dh;
 
 // offset between output array and primitive array
    const int  pvar_offset  = ( N_HF_VAR - PS2 ) / 2;
@@ -1055,55 +1140,20 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       real sint, cost, sinp, cosp;
       CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
 
-//    5. compute grad(Pc) from flux divergence
-//       grad_pc = (1/vmax) * div(flux_F)
-//       We use the fluxes to compute this, but for simplicity use centered difference
-      real dPc_dx, dPc_dy, dPc_dz;
-
-//    x direction gradient (using neighboring cells in primitive array)
-      dPc_dx = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[0]] - 
-                 g_PriVar_Half[CR_E][idx_pvar - didx_pvar[0]] ) * (real)0.5 * _dh / (real)3.0;
-//    y direction gradient
-      dPc_dy = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[1]] - 
-                 g_PriVar_Half[CR_E][idx_pvar - didx_pvar[1]] ) * (real)0.5 * _dh / (real)3.0;
-//    z direction gradient
-      dPc_dz = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[2]] - 
-                 g_PriVar_Half[CR_E][idx_pvar - didx_pvar[2]] ) * (real)0.5 * _dh / (real)3.0;
-
-//    6. compute B dot grad(Pc) and streaming velocity
-      const real Bsq = SQR(Bx) + SQR(By) + SQR(Bz);
-      const real Btot = SQRT( Bsq );
-      const real b_grad_pc = Bx * dPc_dx + By * dPc_dy + Bz * dPc_dz;
-
-//    Alfven velocity
-      const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
-      const real va = Btot * inv_sqrt_rho;
-
-//    streaming velocity direction
-      real dpc_sign = (real)0.0;
-      if ( b_grad_pc > TINY_NUMBER )       dpc_sign = (real)1.0;
-      else if ( -b_grad_pc > TINY_NUMBER ) dpc_sign = (real)-1.0;
-
-//    streaming velocity components: v_adv = -sign(B dot grad Pc) * v_Alfven
-      const real v_adv_x = -Bx * inv_sqrt_rho * dpc_sign;
-      const real v_adv_y = -By * inv_sqrt_rho * dpc_sign;
-      const real v_adv_z = -Bz * inv_sqrt_rho * dpc_sign;
+//    5. READ sigma_adv and v_adv from stored fields (updated by flux function)
+//       This follows the Python/Athena++ pattern where add_source() READS sigma_adv/v_adv
+      const real sigma_adv_para = g_PriVar_Half[ADV_SIGMA][idx_pvar];
+      const real v_adv_x = g_PriVar_Half[ADV_VX][idx_pvar];
+      const real v_adv_y = g_PriVar_Half[ADV_VY][idx_pvar];
+      const real v_adv_z = g_PriVar_Half[ADV_VZ][idx_pvar];
+      const real sigma_adv_perp = CR_MAX_OPACITY;
 
 //    total velocity = gas velocity + streaming velocity
       real vtot1 = v1 + v_adv_x;
       real vtot2 = v2 + v_adv_y;
       real vtot3 = v3 + v_adv_z;
 
-//    7. compute streaming opacity sigma_adv
-      real sigma_adv_para;
-      if ( va > TINY_NUMBER && ec > TINY_NUMBER ) {
-         sigma_adv_para = FABS(b_grad_pc) / ( Btot * va * ((real)4.0/(real)3.0) * invlim * ec );
-      } else {
-         sigma_adv_para = CR_MAX_OPACITY;
-      }
-      const real sigma_adv_perp = CR_MAX_OPACITY;
-
-//    8. save original CR flux for back-reaction calculation
+//    6. save original CR flux for back-reaction calculation
       const real fc1_old = fc1;
       const real fc2_old = fc2;
       const real fc3_old = fc3;
@@ -1187,7 +1237,16 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 //    13. compute perpendicular heating term (ec_source)
 //        This is the work done by perpendicular gas flow: v_perp · grad(Pc)
 //        In B-aligned frame: v_perp = (0, v2, v3), grad_pc_perp = (0, dPc/dy', dPc/dz')
+//        Note: We need to compute grad(Pc) locally for this term
 #     ifdef MHD
+      const real _dh = (real)1.0 / dh;
+      const real dPc_dx = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[0]] - 
+                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[0]] ) * (real)0.5 * _dh / (real)3.0;
+      const real dPc_dy = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[1]] - 
+                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[1]] ) * (real)0.5 * _dh / (real)3.0;
+      const real dPc_dz = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[2]] - 
+                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[2]] ) * (real)0.5 * _dh / (real)3.0;
+
       real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
       RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
 

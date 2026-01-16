@@ -199,6 +199,103 @@ static void CR_UpdateOpacity( const real Ec, const real rho,
 
 
 //-------------------------------------------------------------------------------------------------------
+// Function    : CR_ComputeVdiff
+// Description : Compute v_diff (diffusion velocity) at a CELL CENTER along a given direction
+//
+// Note        : 1. Based on Athena++ cr_transport.cpp CalculateFluxes()
+//               2. Computes v_diff in B-aligned frame, then rotates to lab frame
+//               3. Returns v_diff component along the specified flux direction
+//               4. This should be called separately for left and right cells at each interface
+//
+// Parameter   : sigma_adv   : streaming opacity (parallel to B)
+//               Bx, By, Bz  : cell-centered magnetic field components
+//               Ec          : CR energy density
+//               rho         : gas density
+//               vmax        : effective speed of light
+//               dh          : cell size
+//               fdir        : flux direction (0=x, 1=y, 2=z)
+//
+// Return      : v_diff along the specified direction (fdir)
+//
+// Reference   : Athena++ src/cr/integrators/cr_transport.cpp lines 77-170
+//-------------------------------------------------------------------------------------------------------
+GPU_DEVICE
+static real CR_ComputeVdiff( const real sigma_adv, 
+                             const real Bx, const real By, const real Bz,
+                             const real Ec, const real rho,
+                             const real vmax, const real dh, const int fdir )
+{
+   const real edd = (real)1.0 / (real)3.0;
+   const real sigma_adv_perp = CR_MAX_OPACITY;
+   const real sigma_diff = CR_MAX_OPACITY;
+
+// compute B-field angles for rotation
+   real sint, cost, sinp, cosp;
+   CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
+
+// total sigma (parallel combination of sigma_diff and sigma_adv)
+// In B-aligned frame: sigma_x is parallel to B, sigma_y and sigma_z are perpendicular
+   const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv );
+   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+
+// compute tau and diffv for each B-aligned direction
+// x direction (parallel to B)
+   real tau_x = CR_TAUFACT * sigma_x * dh;
+   tau_x = tau_x * tau_x / ( (real)2.0 * edd );
+   real diffv_x;
+   if ( tau_x < CR_TAU_ASYM_LIM )
+      diffv_x = SQRT( (real)1.0 - (real)0.5 * tau_x );
+   else
+      diffv_x = SQRT( ( (real)1.0 - EXP(-tau_x) ) / tau_x );
+
+// y direction (perpendicular to B)
+   real tau_y = CR_TAUFACT * sigma_y * dh;
+   tau_y = tau_y * tau_y / ( (real)2.0 * edd );
+   real diffv_y;
+   if ( tau_y < CR_TAU_ASYM_LIM )
+      diffv_y = SQRT( (real)1.0 - (real)0.5 * tau_y );
+   else
+      diffv_y = SQRT( ( (real)1.0 - EXP(-tau_y) ) / tau_y );
+
+// z direction (perpendicular to B)
+   real tau_z = CR_TAUFACT * sigma_z * dh;
+   tau_z = tau_z * tau_z / ( (real)2.0 * edd );
+   real diffv_z;
+   if ( tau_z < CR_TAU_ASYM_LIM )
+      diffv_z = SQRT( (real)1.0 - (real)0.5 * tau_z );
+   else
+      diffv_z = SQRT( ( (real)1.0 - EXP(-tau_z) ) / tau_z );
+
+// v_diff in B-aligned frame
+   real vdiff_Bx = vmax * SQRT(edd) * diffv_x;
+   real vdiff_By = vmax * SQRT(edd) * diffv_y;
+   real vdiff_Bz = vmax * SQRT(edd) * diffv_z;
+
+// rotate from B-aligned frame to lab frame
+   InvRotateVec( sint, cost, sinp, cosp, vdiff_Bx, vdiff_By, vdiff_Bz );
+
+// take absolute value
+   vdiff_Bx = FABS( vdiff_Bx );
+   vdiff_By = FABS( vdiff_By );
+   vdiff_Bz = FABS( vdiff_Bz );
+
+// add CR sound speed for stability
+   const real cr_sound = CR_VEL_FLX_FLAG * SQRT( ((real)4.0/(real)9.0) * Ec / rho );
+   vdiff_Bx += cr_sound;
+   vdiff_By += cr_sound;
+   vdiff_Bz += cr_sound;
+
+// return component along flux direction
+   if ( fdir == 0 )      return vdiff_Bx;
+   else if ( fdir == 1 ) return vdiff_By;
+   else                  return vdiff_Bz;
+
+} // FUNCTION : CR_ComputeVdiff
+
+
+
+//-------------------------------------------------------------------------------------------------------
 // Function    : CR_ComputeHLLEFlux
 // Description : Compute HLLE flux for CR variables at a cell interface
 //
@@ -391,112 +488,36 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          const real v_L   = g_ConVar[MOMX+d][idx_L] / rho_L;
          const real v_R   = g_ConVar[MOMX+d][idx_R] / rho_R;
 
-//       3. get magnetic field at interface
-         const real B_N  = g_FC_B[d][idx_fc_B];
-         const real B_T1 = (real)0.5 * ( g_CC_B[TDir1][idx_L] + g_CC_B[TDir1][idx_R] );
-         const real B_T2 = (real)0.5 * ( g_CC_B[TDir2][idx_L] + g_CC_B[TDir2][idx_R] );
+//       3. get cell-centered magnetic field for left and right cells
+         const real Bx_L = g_CC_B[0][idx_L];
+         const real By_L = g_CC_B[1][idx_L];
+         const real Bz_L = g_CC_B[2][idx_L];
+         
+         const real Bx_R = g_CC_B[0][idx_R];
+         const real By_R = g_CC_B[1][idx_R];
+         const real Bz_R = g_CC_B[2][idx_R];
 
-//       reconstruct B components in xyz order
-         real Bx_face, By_face, Bz_face;
-         if ( d == 0 )      { Bx_face = B_N;  By_face = B_T1; Bz_face = B_T2; }
-         else if ( d == 1 ) { Bx_face = B_T2; By_face = B_N;  Bz_face = B_T1; }
-         else               { Bx_face = B_T1; By_face = B_T2; Bz_face = B_N;  }
-
-//       4. compute B-field angles
-         real sint, cost, sinp, cosp;
-         CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
-
-//       5. READ sigma_adv from stored fields (computed at init or previous flux call)
-//          Average left and right cell values to get interface value
-//          This follows the Python/Athena++ pattern where cr_flux() READS sigma_adv at the start
+//       4. READ sigma_adv from stored fields (computed at init or previous flux call)
+//          Use cell-centered values directly (not averaged)
          const real sigma_adv_L = g_ConVar[ADV_SIGMA][idx_L];
          const real sigma_adv_R = g_ConVar[ADV_SIGMA][idx_R];
-         const real sigma_adv_para = (real)0.5 * ( sigma_adv_L + sigma_adv_R );
 
-//       6. get CR parameters
-         const real vmax   = MicroPhy->CR_vmax;
-         const real Ec_face = (real)0.5 * ( Ec_L + Ec_R );
-         const real rho_face = (real)0.5 * ( rho_L + rho_R );
+//       5. get CR parameters
+         const real vmax = MicroPhy->CR_vmax;
 
-//       perpendicular opacities are max_opacity
-         const real sigma_adv_perp = CR_MAX_OPACITY;
+//       6. compute v_diff at cell centers using the new helper function
+//          vdiff_L is computed from LEFT cell's cell-centered data
+//          vdiff_R is computed from RIGHT cell's cell-centered data
+//          This matches Athena++ pattern: vdiff_l_(i) = v_diff[i-1], vdiff_r_(i) = v_diff[i]
+         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_L, rho_L, vmax, dh, d );
+         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_R, rho_R, vmax, dh, d );
 
-//       10. compute total sigma (parallel combination of sigma_diff and sigma_adv)
-         const real sigma_diff = CR_MAX_OPACITY;   // sigma_diff is constant max_opacity
-
-//       in B-aligned frame: sigma_x is parallel, sigma_y and sigma_z are perpendicular
-         const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-         const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-         const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-
-//       11. compute v_diff in B-aligned frame with optical depth correction
-         const real edd = (real)1.0 / (real)3.0;
-
-//       x direction (parallel to B)
-         real tau_x = CR_TAUFACT * sigma_x * dh;
-         tau_x = tau_x * tau_x / ( (real)2.0 * edd );
-         real diffv_x;
-         if ( tau_x < CR_TAU_ASYM_LIM )
-            diffv_x = SQRT( (real)1.0 - (real)0.5 * tau_x );
-         else
-            diffv_x = SQRT( ( (real)1.0 - EXP(-tau_x) ) / tau_x );
-
-//       y direction (perpendicular to B)
-         real tau_y = CR_TAUFACT * sigma_y * dh;
-         tau_y = tau_y * tau_y / ( (real)2.0 * edd );
-         real diffv_y;
-         if ( tau_y < CR_TAU_ASYM_LIM )
-            diffv_y = SQRT( (real)1.0 - (real)0.5 * tau_y );
-         else
-            diffv_y = SQRT( ( (real)1.0 - EXP(-tau_y) ) / tau_y );
-
-//       z direction (perpendicular to B)
-         real tau_z = CR_TAUFACT * sigma_z * dh;
-         tau_z = tau_z * tau_z / ( (real)2.0 * edd );
-         real diffv_z;
-         if ( tau_z < CR_TAU_ASYM_LIM )
-            diffv_z = SQRT( (real)1.0 - (real)0.5 * tau_z );
-         else
-            diffv_z = SQRT( ( (real)1.0 - EXP(-tau_z) ) / tau_z );
-
-//       v_diff in B-aligned frame
-         real vdiff_Bx = vmax * SQRT(edd) * diffv_x;
-         real vdiff_By = vmax * SQRT(edd) * diffv_y;
-         real vdiff_Bz = vmax * SQRT(edd) * diffv_z;
-
-//       12. rotate v_diff from B-aligned frame to lab frame
-         InvRotateVec( sint, cost, sinp, cosp, vdiff_Bx, vdiff_By, vdiff_Bz );
-
-//       take absolute value
-         vdiff_Bx = FABS( vdiff_Bx );
-         vdiff_By = FABS( vdiff_By );
-         vdiff_Bz = FABS( vdiff_Bz );
-
-//       13. add CR sound speed for stability: c_CR = sqrt(4/9 * Ec/rho)
-         const real cr_sound = CR_VEL_FLX_FLAG * SQRT( ((real)4.0/(real)9.0) * Ec_face / rho_face );
-         vdiff_Bx += cr_sound;
-         vdiff_By += cr_sound;
-         vdiff_Bz += cr_sound;
-
-//       14. get v_diff along flux direction
-         real vdiff_L, vdiff_R;
-         if ( d == 0 ) {
-            vdiff_L = vdiff_Bx;
-            vdiff_R = vdiff_Bx;
-         } else if ( d == 1 ) {
-            vdiff_L = vdiff_By;
-            vdiff_R = vdiff_By;
-         } else {
-            vdiff_L = vdiff_Bz;
-            vdiff_R = vdiff_Bz;
-         }
-
-//       15. compute HLLE flux
+//       7. compute HLLE flux
          real flux_E, flux_F[3];
          CR_ComputeHLLEFlux( Ec_L, Ec_R, Fc_L, Fc_R, v_L, v_R, vdiff_L, vdiff_R, vmax, d,
                              flux_E, flux_F );
 
-//       16. add fluxes to output arrays
+//       8. add fluxes to output arrays
          g_Flux_Half[d][CR_E ][idx_flux] = flux_E;
          g_Flux_Half[d][CR_F1][idx_flux] = flux_F[0];
          g_Flux_Half[d][CR_F2][idx_flux] = flux_F[1];
@@ -678,112 +699,37 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          const real v_L   = g_PriVar_Half[1+d][idx_L];
          const real v_R   = g_PriVar_Half[1+d][idx_R];
 
-//       3. get magnetic field at interface from half-step face-centered B
-         const real B_N  = g_FC_B_Half[d][idx_fc_B];
-//       get cell-centered B from primitive variables (stored after MAG_OFFSET)
-         const real B_T1 = (real)0.5 * ( g_PriVar_Half[MAG_OFFSET+TDir1][idx_L] + g_PriVar_Half[MAG_OFFSET+TDir1][idx_R] );
-         const real B_T2 = (real)0.5 * ( g_PriVar_Half[MAG_OFFSET+TDir2][idx_L] + g_PriVar_Half[MAG_OFFSET+TDir2][idx_R] );
+//       3. get cell-centered magnetic field for left and right cells
+//          Cell-centered B is stored after MAG_OFFSET in primitive variables
+         const real Bx_L = g_PriVar_Half[MAG_OFFSET+0][idx_L];
+         const real By_L = g_PriVar_Half[MAG_OFFSET+1][idx_L];
+         const real Bz_L = g_PriVar_Half[MAG_OFFSET+2][idx_L];
+         
+         const real Bx_R = g_PriVar_Half[MAG_OFFSET+0][idx_R];
+         const real By_R = g_PriVar_Half[MAG_OFFSET+1][idx_R];
+         const real Bz_R = g_PriVar_Half[MAG_OFFSET+2][idx_R];
 
-//       reconstruct B components in xyz order
-         real Bx_face, By_face, Bz_face;
-         if ( d == 0 )      { Bx_face = B_N;  By_face = B_T1; Bz_face = B_T2; }
-         else if ( d == 1 ) { Bx_face = B_T2; By_face = B_N;  Bz_face = B_T1; }
-         else               { Bx_face = B_T1; By_face = B_T2; Bz_face = B_N;  }
-
-//       4. compute B-field angles
-         real sint, cost, sinp, cosp;
-         CR_ComputeBFieldAngles( Bx_face, By_face, Bz_face, sint, cost, sinp, cosp );
-
-//       5. READ sigma_adv from stored fields (computed at init or previous flux call)
-//          Average left and right cell values to get interface value
-//          This follows the Python/Athena++ pattern where cr_flux() READS sigma_adv at the start
+//       4. READ sigma_adv from stored fields (computed at init or previous flux call)
+//          Use cell-centered values directly (not averaged)
          const real sigma_adv_L = g_PriVar_Half[ADV_SIGMA][idx_L];
          const real sigma_adv_R = g_PriVar_Half[ADV_SIGMA][idx_R];
-         const real sigma_adv_para = (real)0.5 * ( sigma_adv_L + sigma_adv_R );
 
-//       6. get CR parameters
-         const real vmax   = MicroPhy->CR_vmax;
-         const real Ec_face = (real)0.5 * ( Ec_L + Ec_R );
-         const real rho_face = (real)0.5 * ( rho_L + rho_R );
+//       5. get CR parameters
+         const real vmax = MicroPhy->CR_vmax;
 
-//       perpendicular opacities are max_opacity
-         const real sigma_adv_perp = CR_MAX_OPACITY;
+//       6. compute v_diff at cell centers using the new helper function
+//          vdiff_L is computed from LEFT cell's cell-centered data
+//          vdiff_R is computed from RIGHT cell's cell-centered data
+//          This matches Athena++ pattern: vdiff_l_(i) = v_diff[i-1], vdiff_r_(i) = v_diff[i]
+         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_L, rho_L, vmax, dh, d );
+         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_R, rho_R, vmax, dh, d );
 
-//       10. compute total sigma (parallel combination of sigma_diff and sigma_adv)
-         const real sigma_diff = CR_MAX_OPACITY;
-
-         const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-         const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-         const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-
-//       11. compute v_diff in B-aligned frame with optical depth correction
-         const real edd = (real)1.0 / (real)3.0;
-
-//       x direction (parallel to B)
-         real tau_x = CR_TAUFACT * sigma_x * dh;
-         tau_x = tau_x * tau_x / ( (real)2.0 * edd );
-         real diffv_x;
-         if ( tau_x < CR_TAU_ASYM_LIM )
-            diffv_x = SQRT( (real)1.0 - (real)0.5 * tau_x );
-         else
-            diffv_x = SQRT( ( (real)1.0 - EXP(-tau_x) ) / tau_x );
-
-//       y direction (perpendicular to B)
-         real tau_y = CR_TAUFACT * sigma_y * dh;
-         tau_y = tau_y * tau_y / ( (real)2.0 * edd );
-         real diffv_y;
-         if ( tau_y < CR_TAU_ASYM_LIM )
-            diffv_y = SQRT( (real)1.0 - (real)0.5 * tau_y );
-         else
-            diffv_y = SQRT( ( (real)1.0 - EXP(-tau_y) ) / tau_y );
-
-//       z direction (perpendicular to B)
-         real tau_z = CR_TAUFACT * sigma_z * dh;
-         tau_z = tau_z * tau_z / ( (real)2.0 * edd );
-         real diffv_z;
-         if ( tau_z < CR_TAU_ASYM_LIM )
-            diffv_z = SQRT( (real)1.0 - (real)0.5 * tau_z );
-         else
-            diffv_z = SQRT( ( (real)1.0 - EXP(-tau_z) ) / tau_z );
-
-//       v_diff in B-aligned frame
-         real vdiff_Bx = vmax * SQRT(edd) * diffv_x;
-         real vdiff_By = vmax * SQRT(edd) * diffv_y;
-         real vdiff_Bz = vmax * SQRT(edd) * diffv_z;
-
-//       12. rotate v_diff from B-aligned frame to lab frame
-         InvRotateVec( sint, cost, sinp, cosp, vdiff_Bx, vdiff_By, vdiff_Bz );
-
-//       take absolute value
-         vdiff_Bx = FABS( vdiff_Bx );
-         vdiff_By = FABS( vdiff_By );
-         vdiff_Bz = FABS( vdiff_Bz );
-
-//       13. add CR sound speed for stability
-         const real cr_sound = CR_VEL_FLX_FLAG * SQRT( ((real)4.0/(real)9.0) * Ec_face / rho_face );
-         vdiff_Bx += cr_sound;
-         vdiff_By += cr_sound;
-         vdiff_Bz += cr_sound;
-
-//       14. get v_diff along flux direction
-         real vdiff_L, vdiff_R;
-         if ( d == 0 ) {
-            vdiff_L = vdiff_Bx;
-            vdiff_R = vdiff_Bx;
-         } else if ( d == 1 ) {
-            vdiff_L = vdiff_By;
-            vdiff_R = vdiff_By;
-         } else {
-            vdiff_L = vdiff_Bz;
-            vdiff_R = vdiff_Bz;
-         }
-
-//       15. compute HLLE flux
+//       7. compute HLLE flux
          real flux_E, flux_F[3];
          CR_ComputeHLLEFlux( Ec_L, Ec_R, Fc_L, Fc_R, v_L, v_R, vdiff_L, vdiff_R, vmax, d,
                              flux_E, flux_F );
 
-//       16. add fluxes to output arrays (replace, not add, since hydro doesn't handle CR)
+//       8. add fluxes to output arrays (replace, not add, since hydro doesn't handle CR)
          g_FC_Flux[d][CR_E ][idx_flux] = flux_E;
          g_FC_Flux[d][CR_F1][idx_flux] = flux_F[0];
          g_FC_Flux[d][CR_F2][idx_flux] = flux_F[1];

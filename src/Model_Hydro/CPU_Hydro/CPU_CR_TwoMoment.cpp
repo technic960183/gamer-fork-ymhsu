@@ -9,7 +9,7 @@
 static const real CR_MAX_OPACITY    = (real)1.0e20;   // max_opacity for diffusion (effectively infinite)
 static const real CR_TAU_ASYM_LIM   = (real)1.0e-3;   // optical depth limit for asymptotic expansion
 static const real CR_TAUFACT        = (real)1.0;      // tau factor for optical depth calculation
-static const int  CR_VEL_FLX_FLAG   = 1;              // flag to add CR sound speed to v_diff
+static const int  CR_VEL_FLX_FLAG   = 0;              // flag to add CR sound speed to v_diff
 
 
 //-------------------------------------------------------------------------------------------------------
@@ -227,7 +227,7 @@ static real CR_ComputeVdiff( const real sigma_adv,
 {
    const real edd = (real)1.0 / (real)3.0;
    const real sigma_adv_perp = CR_MAX_OPACITY;
-   const real sigma_diff = CR_MAX_OPACITY;
+   const real sigma_diff = 1e8;
 
 // compute B-field angles for rotation
    real sint, cost, sinp, cosp;

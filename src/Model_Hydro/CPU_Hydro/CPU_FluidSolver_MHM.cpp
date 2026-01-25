@@ -171,7 +171,14 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
                                 const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                                 const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
-                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );                          
+                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
+void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+                       const real g_CellVar[][ CUBE(FLU_NXT) ],
+                       const real g_CC_B[][ CUBE(FLU_NXT) ],
+                       const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                       const int NFlux, const int NVar_Out, const int NVar_In, const int NVar_B,
+                       const int out_offset, const int in_offset,
+                       const real dh, const MicroPhy_t *MicroPhy );
 #endif // #ifdef CR_STREAMING
 #endif // #ifdef COSMIC_RAY
 
@@ -470,6 +477,17 @@ void CPU_FluidSolver_MHM(
 
 #        ifdef CR_STREAMING
          CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_Mag_Array_In[P], g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
+
+//       update opacity after half-step flux computation
+//       output: g_Flu_Array_In[P] (via const_cast), input: same array, B from g_PriVar_1PG+MAG_OFFSET
+#        ifdef __CUDACC__
+         __syncthreads();
+#        endif
+         {
+         real (*g_Flu_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_In[P]);
+         CR_UpdateOpacity( g_Flu_mod, g_Flu_Array_In[P], g_PriVar_1PG+MAG_OFFSET,
+                           g_Flux_Half_1PG, N_HF_FLUX, FLU_NXT, FLU_NXT, FLU_NXT, 0, 0, dh, &MicroPhy );
+         }
 #        endif
 
 
@@ -569,6 +587,17 @@ void CPU_FluidSolver_MHM(
 
 #           ifdef CR_STREAMING
             CR_TwoMomentFlux_FullStep( g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG, N_FL_FLUX, dh, &MicroPhy );
+
+//          update opacity after full-step flux computation
+//          output: g_PriVar_Half_1PG, input: same array, B from g_PriVar_Half_1PG[MAG_OFFSET+*]
+#           ifdef __CUDACC__
+            __syncthreads();
+#           endif
+            {
+            const int half_offset = ( N_HF_VAR - N_FL_FLUX ) / 2;
+            CR_UpdateOpacity( g_PriVar_Half_1PG, g_PriVar_Half_1PG, g_PriVar_Half_1PG+MAG_OFFSET,
+                              g_FC_Flux_1PG, N_FL_FLUX, N_HF_VAR, N_HF_VAR, N_HF_VAR, half_offset, half_offset, dh, &MicroPhy );
+            }
 #           endif
 
 
@@ -611,6 +640,22 @@ void CPU_FluidSolver_MHM(
 #           ifdef CR_STREAMING
             CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG, g_FC_Var_1PG,
                                          dt, dh, &EoS, &MicroPhy );
+
+//          update opacity after full-step source computation
+//          output: g_Flu_Array_Out[P], input: g_PriVar_Half_1PG for rho/Ec
+//          TODO: B field should be from updated cell-centered B at full time-step (via MHD_GetCellCenteredBField
+//                from g_Mag_Array_Out). Currently using g_PriVar_Half_1PG+MAG_OFFSET as a temporary solution.
+#           ifdef __CUDACC__
+            __syncthreads();
+#           endif
+            {
+            const int pvar_offset = ( N_HF_VAR - PS2 ) / 2;
+//          Note: g_Flu_Array_Out has size CUBE(PS2), cast to CUBE(FLU_NXT) for function signature
+//                The function internally handles the correct indexing via NVar_Out=PS2
+            real (*g_Out_cast)[CUBE(FLU_NXT)] = reinterpret_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_Out[P]);
+            CR_UpdateOpacity( g_Out_cast, g_PriVar_Half_1PG, g_PriVar_Half_1PG+MAG_OFFSET,
+                              g_FC_Flux_1PG, N_FL_FLUX, PS2, N_HF_VAR, N_HF_VAR, 0, pvar_offset, dh, &MicroPhy );
+            }
 #           endif
 
 
@@ -983,6 +1028,16 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #     endif
    } // i,j,k
 
+
+//  update opacity after half-step source computation
+//  output: g_PriVar_Half, input: same array, B from g_PriVar_Half[MAG_OFFSET+*]
+#  ifdef CR_STREAMING
+#  ifdef __CUDACC__
+   __syncthreads();
+#  endif
+   CR_UpdateOpacity( g_PriVar_Half, g_PriVar_Half, g_PriVar_Half+MAG_OFFSET,
+                     g_Flux_Half, N_HF_FLUX, N_HF_VAR, N_HF_VAR, N_HF_VAR, 0, 0, dh, MicroPhy );
+#  endif
 
 #  ifdef __CUDACC__
    __syncthreads();

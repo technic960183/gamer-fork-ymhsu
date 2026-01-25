@@ -134,8 +134,9 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    : CR_UpdateOpacity
+// Function    : CR_UpdateOpacity_OneCell
 // Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) from grad(Pc)
+//               for a single cell
 //
 // Note        : 1. Based on Athena++ DefaultStreaming() in cr.cpp
 //               2. sigma_adv[0] is parallel to B, sigma_adv[1,2] are perpendicular (set to max_opacity)
@@ -154,7 +155,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 // Reference   : Athena++ src/cr/cr.cpp DefaultStreaming()
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
-static void CR_UpdateOpacity( const real Ec, const real rho,
+static void CR_UpdateOpacity_OneCell( const real Ec, const real rho,
                               const real Bx, const real By, const real Bz,
                               const real grad_pc[3], const real vmax,
                               real &sigma_adv, real v_adv[3] )
@@ -193,6 +194,108 @@ static void CR_UpdateOpacity( const real Ec, const real rho,
    } else {
       sigma_adv = CR_MAX_OPACITY;
    }
+
+} // FUNCTION : CR_UpdateOpacity_OneCell
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    : CR_UpdateOpacity
+// Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) from flux divergence
+//               for all interior cells
+//
+// Note        : 1. This function loops over interior cells and calls CR_UpdateOpacity_OneCell for each
+//               2. Works for both half-step and full-step by using appropriate parameters
+//               3. grad_pc is computed from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
+//
+// Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
+//               g_CellVar    : Array storing cell-centered variables (for reading rho, Ec)
+//                              If NULL, read from g_Output
+//               g_CC_B       : Array storing cell-centered B field [3][ CUBE(N) ]
+//               g_Flux       : Array storing fluxes [][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ]
+//               NFlux        : Stride for accessing g_Flux[] (N_HF_FLUX or N_FL_FLUX)
+//               NVar_Out     : Stride for accessing g_Output[] (FLU_NXT, N_HF_VAR, or PS2)
+//               NVar_In      : Stride for accessing g_CellVar[] (FLU_NXT or N_HF_VAR)
+//               NVar_B       : Stride for accessing g_CC_B[] (FLU_NXT or N_HF_VAR)
+//               out_offset   : Offset between flux cell index and output index
+//               in_offset    : Offset between flux cell index and input (g_CellVar) index
+//               dh           : Cell size
+//               MicroPhy     : Microphysics object containing vmax
+//
+// Return      : Modified ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ in g_Output
+//-------------------------------------------------------------------------------------------------------
+GPU_DEVICE
+void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+                       const real g_CellVar[][ CUBE(FLU_NXT) ],
+                       const real g_CC_B[][ CUBE(FLU_NXT) ],
+                       const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                       const int NFlux, const int NVar_Out, const int NVar_In, const int NVar_B,
+                       const int out_offset, const int in_offset,
+                       const real dh, const MicroPhy_t *MicroPhy )
+{
+   const real vmax = MicroPhy->CR_vmax;
+   const real _dh  = (real)1.0 / dh;
+   const int  cell_offset = 1;  // skip boundary cells
+
+// determine input array: use g_CellVar if provided, else g_Output
+   const real (*g_Input)[CUBE(FLU_NXT)] = ( g_CellVar != NULL ) ? g_CellVar : g_Output;
+
+// loop bounds
+   const int cell_size_i  = NFlux - 2*cell_offset;
+   const int cell_size_j  = NFlux - 2*cell_offset;
+   const int cell_size_k  = NFlux - 2*cell_offset;
+   const int cell_size_ij = cell_size_i * cell_size_j;
+
+   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+   {
+//    flux cell indices
+      const int i_cell = idx_cell % cell_size_i + cell_offset;
+      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
+      const int k_cell = idx_cell / cell_size_ij + cell_offset;
+      const int idx_flux = IDX321( i_cell, j_cell, k_cell, NFlux, NFlux );
+
+//    output indices (with out_offset)
+      const int i_out = i_cell + out_offset;
+      const int j_out = j_cell + out_offset;
+      const int k_out = k_cell + out_offset;
+      const int idx_out = IDX321( i_out, j_out, k_out, NVar_Out, NVar_Out );
+
+//    input indices (with in_offset)
+      const int i_in = i_cell + in_offset;
+      const int j_in = j_cell + in_offset;
+      const int k_in = k_cell + in_offset;
+      const int idx_in = IDX321( i_in, j_in, k_in, NVar_In, NVar_In );
+
+//    B field index (may differ from input index if NVar_B != NVar_In)
+      const int idx_B = IDX321( i_in, j_in, k_in, NVar_B, NVar_B );
+
+//    compute grad_pc from flux divergence
+      real grad_pc[3];
+      grad_pc[0] = ( g_Flux[0][CR_F1][idx_flux] - g_Flux[0][CR_F1][idx_flux - 1] ) * _dh / vmax;
+      grad_pc[1] = ( g_Flux[1][CR_F2][idx_flux] - g_Flux[1][CR_F2][idx_flux - NFlux] ) * _dh / vmax;
+      grad_pc[2] = ( g_Flux[2][CR_F3][idx_flux] - g_Flux[2][CR_F3][idx_flux - SQR(NFlux)] ) * _dh / vmax;
+
+//    get cell-centered values for updating opacity
+      const real Ec  = g_Input[CR_E ][idx_in];
+      const real rho = g_Input[DENS][idx_in];
+
+//    get B field from g_CC_B array
+      const real Bx = g_CC_B[0][idx_B];
+      const real By = g_CC_B[1][idx_B];
+      const real Bz = g_CC_B[2][idx_B];
+
+//    call CR_UpdateOpacity_OneCell to compute new sigma_adv and v_adv
+      real sigma_adv_new;
+      real v_adv_new[3];
+      CR_UpdateOpacity_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
+
+//    store updated values
+      g_Output[ADV_SIGMA][idx_out] = sigma_adv_new;
+      g_Output[ADV_VX   ][idx_out] = v_adv_new[0];
+      g_Output[ADV_VY   ][idx_out] = v_adv_new[1];
+      g_Output[ADV_VZ   ][idx_out] = v_adv_new[2];
+
+   } // CGPU_LOOP
 
 } // FUNCTION : CR_UpdateOpacity
 
@@ -527,70 +630,6 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
    } // for (int d=0; d<3; d++)
 
 
-// ============================================================================
-// 17. UPDATE sigma_adv and v_adv from flux divergence (after all fluxes computed)
-//     This follows the Python/Athena++ pattern: cr_flux() WRITES sigma_adv at the end
-//     using grad_pc computed from flux divergence: grad_pc = div(F_cr) / vmax
-// ============================================================================
-   const real vmax = MicroPhy->CR_vmax;
-   const int  cell_offset = 1;  // skip boundary cells
-
-// loop over interior cells to update opacity
-   const int cell_size_i = N_HF_FLUX - 2*cell_offset;
-   const int cell_size_j = N_HF_FLUX - 2*cell_offset;
-   const int cell_size_k = N_HF_FLUX - 2*cell_offset;
-   const int cell_size_ij = cell_size_i * cell_size_j;
-
-   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
-   {
-      const int i_cell = idx_cell % cell_size_i            + cell_offset;
-      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
-      const int k_cell = idx_cell / cell_size_ij           + cell_offset;
-      const int idx_flux_cell = IDX321( i_cell, j_cell, k_cell, N_HF_FLUX, N_HF_FLUX );
-
-//    conserved variable index (for reading rho, Bcc, Ec and writing ADV_*)
-      const int idx_cvar_cell = IDX321( i_cell, j_cell, k_cell, FLU_NXT, FLU_NXT );
-
-//    compute grad_pc from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
-//    In GAMER MHD convention: flux[idx] is the RIGHT face of cell idx (face i+1/2)
-//    So for cell at idx: right face = flux[idx], left face = flux[idx-1]
-//    Divergence = (right_flux - left_flux) / dx = (flux[idx] - flux[idx-1]) / dx
-      real grad_pc[3];
-
-//    x-direction: use x-flux of CRF1
-      grad_pc[0] = ( g_Flux_Half[0][CR_F1][idx_flux_cell] - g_Flux_Half[0][CR_F1][idx_flux_cell - 1] ) * _dh / vmax;
-
-//    y-direction: use y-flux of CRF2
-      grad_pc[1] = ( g_Flux_Half[1][CR_F2][idx_flux_cell] - g_Flux_Half[1][CR_F2][idx_flux_cell - N_HF_FLUX] ) * _dh / vmax;
-
-//    z-direction: use z-flux of CRF3
-      grad_pc[2] = ( g_Flux_Half[2][CR_F3][idx_flux_cell] - g_Flux_Half[2][CR_F3][idx_flux_cell - SQR(N_HF_FLUX)] ) * _dh / vmax;
-
-//    get cell-centered values for updating opacity
-      const real Ec  = g_ConVar[CR_E ][idx_cvar_cell];
-      const real rho = g_ConVar[DENS][idx_cvar_cell];
-      const real Bx  = g_CC_B[0][idx_cvar_cell];
-      const real By  = g_CC_B[1][idx_cvar_cell];
-      const real Bz  = g_CC_B[2][idx_cvar_cell];
-
-//    call CR_UpdateOpacity to compute new sigma_adv and v_adv
-      real sigma_adv_new;
-      real v_adv_new[3];
-      CR_UpdateOpacity( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
-
-//    store updated values to auxiliary fields
-//    Note: g_ConVar is declared const, but we need to modify ADV_* fields
-//          This requires changing the function signature or using a separate output array
-//          For now, we cast away const (not ideal but necessary for current structure)
-      real (*g_ConVar_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_ConVar);
-      g_ConVar_mod[ADV_SIGMA][idx_cvar_cell] = sigma_adv_new;
-      g_ConVar_mod[ADV_VX   ][idx_cvar_cell] = v_adv_new[0];
-      g_ConVar_mod[ADV_VY   ][idx_cvar_cell] = v_adv_new[1];
-      g_ConVar_mod[ADV_VZ   ][idx_cvar_cell] = v_adv_new[2];
-
-   } // CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
-
-
 } // FUMCTION : CR_TwoMomentFlux_HalfStep
 
 
@@ -738,69 +777,6 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       } // CGPU_LOOP( idx, size_i*size_j*size_k )
    } // for (int d=0; d<3; d++)
 
-
-// ============================================================================
-// 17. UPDATE sigma_adv and v_adv from flux divergence (after all fluxes computed)
-//     This follows the Python/Athena++ pattern: cr_flux() WRITES sigma_adv at the end
-//     using grad_pc computed from flux divergence: grad_pc = div(F_cr) / vmax
-// ============================================================================
-   const real vmax = MicroPhy->CR_vmax;
-   const int  cell_offset = 1;  // skip boundary cells
-
-// loop over interior cells to update opacity
-   const int cell_size_i = NFlux - 2*cell_offset;
-   const int cell_size_j = NFlux - 2*cell_offset;
-   const int cell_size_k = NFlux - 2*cell_offset;
-   const int cell_size_ij = cell_size_i * cell_size_j;
-
-   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
-   {
-      const int i_cell = idx_cell % cell_size_i            + cell_offset;
-      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
-      const int k_cell = idx_cell / cell_size_ij           + cell_offset;
-      const int idx_flux_cell = IDX321( i_cell, j_cell, k_cell, NFlux, NFlux );
-
-//    primitive variable index (with half_offset)
-      const int i_pvar = i_cell + half_offset;
-      const int j_pvar = j_cell + half_offset;
-      const int k_pvar = k_cell + half_offset;
-      const int idx_pvar_cell = IDX321( i_pvar, j_pvar, k_pvar, N_HF_VAR, N_HF_VAR );
-
-//    compute grad_pc from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
-//    In GAMER MHD convention: flux[idx] is the RIGHT face of cell idx
-//    Divergence = (flux[idx] - flux[idx-1]) / dx
-      real grad_pc[3];
-
-//    x-direction: use x-flux of CRF1
-      grad_pc[0] = ( g_FC_Flux[0][CR_F1][idx_flux_cell] - g_FC_Flux[0][CR_F1][idx_flux_cell - 1] ) * _dh / vmax;
-
-//    y-direction: use y-flux of CRF2
-      grad_pc[1] = ( g_FC_Flux[1][CR_F2][idx_flux_cell] - g_FC_Flux[1][CR_F2][idx_flux_cell - NFlux] ) * _dh / vmax;
-
-//    z-direction: use z-flux of CRF3
-      grad_pc[2] = ( g_FC_Flux[2][CR_F3][idx_flux_cell] - g_FC_Flux[2][CR_F3][idx_flux_cell - SQR(NFlux)] ) * _dh / vmax;
-
-//    get cell-centered values for updating opacity
-      const real Ec  = g_PriVar_Half[CR_E ][idx_pvar_cell];
-      const real rho = g_PriVar_Half[DENS][idx_pvar_cell];
-      const real Bx  = g_PriVar_Half[MAG_OFFSET+0][idx_pvar_cell];
-      const real By  = g_PriVar_Half[MAG_OFFSET+1][idx_pvar_cell];
-      const real Bz  = g_PriVar_Half[MAG_OFFSET+2][idx_pvar_cell];
-
-//    call CR_UpdateOpacity to compute new sigma_adv and v_adv
-      real sigma_adv_new;
-      real v_adv_new[3];
-      CR_UpdateOpacity( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
-
-//    store updated values to auxiliary fields in primitive array
-//    Note: g_PriVar_Half is declared const, but we need to modify ADV_* fields
-      real (*g_PriVar_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_PriVar_Half);
-      g_PriVar_mod[ADV_SIGMA][idx_pvar_cell] = sigma_adv_new;
-      g_PriVar_mod[ADV_VX   ][idx_pvar_cell] = v_adv_new[0];
-      g_PriVar_mod[ADV_VY   ][idx_pvar_cell] = v_adv_new[1];
-      g_PriVar_mod[ADV_VZ   ][idx_pvar_cell] = v_adv_new[2];
-
-   } // CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
 
 } // FUNCTION : CR_TwoMomentFlux_FullStep
 

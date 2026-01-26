@@ -134,7 +134,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    : CR_UpdateOpacity_OneCell
+// Function    : CR_UpdateStreaming_OneCell
 // Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) from grad(Pc)
 //               for a single cell
 //
@@ -142,7 +142,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 //               2. sigma_adv[0] is parallel to B, sigma_adv[1,2] are perpendicular (set to max_opacity)
 //               3. v_adv = -sign(B dot grad Pc) * v_Alfven
 //               4. This function should be called after flux calculation with grad_pc computed
-//                  from flux divergence, or at initialization with grad_pc from central differences
+//                  from flux divergence
 //
 // Parameter   : Ec          : CR energy density
 //               rho         : gas density
@@ -155,7 +155,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
 // Reference   : Athena++ src/cr/cr.cpp DefaultStreaming()
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
-static void CR_UpdateOpacity_OneCell( const real Ec, const real rho,
+static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
                               const real Bx, const real By, const real Bz,
                               const real grad_pc[3], const real vmax,
                               real &sigma_adv, real v_adv[3] )
@@ -195,18 +195,19 @@ static void CR_UpdateOpacity_OneCell( const real Ec, const real rho,
       sigma_adv = CR_MAX_OPACITY;
    }
 
-} // FUNCTION : CR_UpdateOpacity_OneCell
+} // FUNCTION : CR_UpdateStreaming_OneCell
 
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    : CR_UpdateOpacity
+// Function    : CR_UpdateStreaming
 // Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) from flux divergence
 //               for all interior cells
 //
-// Note        : 1. This function loops over interior cells and calls CR_UpdateOpacity_OneCell for each
+// Note        : 1. This function loops over interior cells and calls CR_UpdateStreaming_OneCell for each
 //               2. Works for both half-step and full-step by using appropriate parameters
 //               3. grad_pc is computed from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
+//               4. Based on Athena++ DefaultStreaming() - called AFTER flux calculation
 //
 // Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
 //               g_CellVar    : Array storing cell-centered variables (for reading rho, Ec)
@@ -225,7 +226,7 @@ static void CR_UpdateOpacity_OneCell( const real Ec, const real rho,
 // Return      : Modified ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ in g_Output
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
-void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
                        const real g_CellVar[][ CUBE(FLU_NXT) ],
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
                        const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
@@ -284,16 +285,155 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
       const real By = g_CC_B[1][idx_B];
       const real Bz = g_CC_B[2][idx_B];
 
-//    call CR_UpdateOpacity_OneCell to compute new sigma_adv and v_adv
+//    call CR_UpdateStreaming_OneCell to compute new sigma_adv and v_adv
       real sigma_adv_new;
       real v_adv_new[3];
-      CR_UpdateOpacity_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
+      CR_UpdateStreaming_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv_new, v_adv_new );
 
 //    store updated values
       g_Output[ADV_SIGMA][idx_out] = sigma_adv_new;
       g_Output[ADV_VX   ][idx_out] = v_adv_new[0];
       g_Output[ADV_VY   ][idx_out] = v_adv_new[1];
       g_Output[ADV_VZ   ][idx_out] = v_adv_new[2];
+
+   } // CGPU_LOOP
+
+} // FUNCTION : CR_UpdateStreaming
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    : CR_UpdateOpacity
+// Description : Update streaming opacity (sigma_adv) and streaming velocity (v_adv) using
+//               CENTRAL DIFFERENCE gradient of CR pressure
+//
+// Note        : 1. Based on Athena++ DefaultOpacity() in cr.cpp
+//               2. This function uses central differences to compute grad(Pc), NOT flux divergence
+//               3. Should be called AFTER the source term (like Athena's DefaultOpacity is called
+//                  after AddSourceTerms in the task list)
+//               4. The sigma_adv and v_adv computed here will be used in the NEXT timestep's
+//                  flux calculation
+//
+// Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
+//               g_CC_B       : Array storing cell-centered B field [3][ CUBE(N) ]
+//               NVar_Out     : Stride for accessing g_Output[] (FLU_NXT, N_HF_VAR, or PS2)
+//               NVar_In      : Stride for accessing g_Output[] for neighbor access
+//               NVar_B       : Stride for accessing g_CC_B[] (FLU_NXT or N_HF_VAR)
+//               out_offset   : Offset for output index relative to interior
+//               in_offset    : Offset for input index relative to interior
+//               NSize        : Size of the interior region to update
+//               dh           : Cell size
+//               MicroPhy     : Microphysics object containing vmax
+//
+// Return      : Modified ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ in g_Output
+//
+// Reference   : Athena++ src/cr/cr.cpp DefaultOpacity()
+//-------------------------------------------------------------------------------------------------------
+GPU_DEVICE
+void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+                       const real g_CC_B[][ CUBE(FLU_NXT) ],
+                       const int NVar_Out, const int NVar_In, const int NVar_B,
+                       const int out_offset, const int in_offset, const int NSize,
+                       const real dh, const MicroPhy_t *MicroPhy )
+{
+   const real vmax   = MicroPhy->CR_vmax;
+   const real invlim = (real)1.0 / vmax;
+   const real _2dh   = (real)0.5 / dh;
+   const int  cell_offset = 1;  // skip boundary cells
+
+// loop bounds for interior cells
+   const int cell_size_i  = NSize - 2*cell_offset;
+   const int cell_size_j  = NSize - 2*cell_offset;
+   const int cell_size_k  = NSize - 2*cell_offset;
+   const int cell_size_ij = cell_size_i * cell_size_j;
+
+   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+   {
+//    cell indices within the loop region
+      const int i_cell = idx_cell % cell_size_i + cell_offset;
+      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
+      const int k_cell = idx_cell / cell_size_ij + cell_offset;
+
+//    output indices (with out_offset)
+      const int i_out = i_cell + out_offset;
+      const int j_out = j_cell + out_offset;
+      const int k_out = k_cell + out_offset;
+      const int idx_out = IDX321( i_out, j_out, k_out, NVar_Out, NVar_Out );
+
+//    input indices for central difference (with in_offset)
+      const int i_in = i_cell + in_offset;
+      const int j_in = j_cell + in_offset;
+      const int k_in = k_cell + in_offset;
+      const int idx_in = IDX321( i_in, j_in, k_in, NVar_In, NVar_In );
+
+//    neighbor indices for central difference
+      const int idx_ip1 = IDX321( i_in+1, j_in,   k_in,   NVar_In, NVar_In );
+      const int idx_im1 = IDX321( i_in-1, j_in,   k_in,   NVar_In, NVar_In );
+      const int idx_jp1 = IDX321( i_in,   j_in+1, k_in,   NVar_In, NVar_In );
+      const int idx_jm1 = IDX321( i_in,   j_in-1, k_in,   NVar_In, NVar_In );
+      const int idx_kp1 = IDX321( i_in,   j_in,   k_in+1, NVar_In, NVar_In );
+      const int idx_km1 = IDX321( i_in,   j_in,   k_in-1, NVar_In, NVar_In );
+
+//    B field index
+      const int idx_B = IDX321( i_in, j_in, k_in, NVar_B, NVar_B );
+
+//    compute grad(Pc) using central differences
+//    Pc = Ec / 3, so grad(Pc) = (1/3) * grad(Ec)
+//    Following Athena++: dprdx = (Ec[i+1] - Ec[i-1]) / 3.0 / (2*dx)
+      real grad_pc[3];
+      grad_pc[0] = ( g_Output[CR_E][idx_ip1] - g_Output[CR_E][idx_im1] ) / (real)3.0 * _2dh;
+      grad_pc[1] = ( g_Output[CR_E][idx_jp1] - g_Output[CR_E][idx_jm1] ) / (real)3.0 * _2dh;
+      grad_pc[2] = ( g_Output[CR_E][idx_kp1] - g_Output[CR_E][idx_km1] ) / (real)3.0 * _2dh;
+
+//    get cell-centered values
+      const real Ec  = g_Output[CR_E ][idx_in];
+      const real rho = g_Output[DENS][idx_in];
+
+//    get B field from g_CC_B array
+      const real Bx = g_CC_B[0][idx_B];
+      const real By = g_CC_B[1][idx_B];
+      const real Bz = g_CC_B[2][idx_B];
+
+//    compute B field magnitude and Alfven velocity
+      const real bsq  = SQR(Bx) + SQR(By) + SQR(Bz);
+      const real btot = SQRT( bsq );
+      const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
+      const real va = btot * inv_sqrt_rho;
+
+//    compute B dot grad(Pc)
+      const real b_grad_pc = Bx * grad_pc[0] + By * grad_pc[1] + Bz * grad_pc[2];
+
+//    determine sign of B dot grad(Pc)
+      real dpc_sign = (real)0.0;
+      if ( b_grad_pc > TINY_NUMBER )
+         dpc_sign = (real)1.0;
+      else if ( -b_grad_pc > TINY_NUMBER )
+         dpc_sign = (real)-1.0;
+
+//    compute streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
+      const real va1 = Bx * inv_sqrt_rho;
+      const real va2 = By * inv_sqrt_rho;
+      const real va3 = Bz * inv_sqrt_rho;
+
+      real v_adv[3];
+      v_adv[0] = -va1 * dpc_sign;
+      v_adv[1] = -va2 * dpc_sign;
+      v_adv[2] = -va3 * dpc_sign;
+
+//    compute streaming opacity (parallel to B)
+//    sigma_adv = |B dot grad Pc| / (|B| * v_A * (4/3) * (1/vmax) * Ec)
+      real sigma_adv;
+      if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
+         sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
+      } else {
+         sigma_adv = CR_MAX_OPACITY;
+      }
+
+//    store updated values
+      g_Output[ADV_SIGMA][idx_out] = sigma_adv;
+      g_Output[ADV_VX   ][idx_out] = v_adv[0];
+      g_Output[ADV_VY   ][idx_out] = v_adv[1];
+      g_Output[ADV_VZ   ][idx_out] = v_adv[2];
 
    } // CGPU_LOOP
 

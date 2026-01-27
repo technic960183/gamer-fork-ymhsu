@@ -157,10 +157,12 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                             const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],
                             const real g_CC_B[][ CUBE(FLU_NXT) ],
                             const real dh, const MicroPhy_t *MicroPhy );
-void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
+void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
+                                 const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                        real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                                  const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
-                                 const int NFlux, const real dh, const MicroPhy_t *MicroPhy );
+                                 const int NFlux, const int NSkip_N, const int NSkip_T,
+                                 const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
                             const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
@@ -591,7 +593,8 @@ void CPU_FluidSolver_MHM(
 #           endif
 
 #           ifdef CR_STREAMING
-            CR_TwoMomentFlux_FullStep( g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG, N_FL_FLUX, dh, &MicroPhy );
+            CR_TwoMomentFlux_FullStep( g_FC_Var_1PG, g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG,
+                                       N_FL_FLUX, NSkip_N, NSkip_T, dh, &MicroPhy );
 
 //          update streaming velocity/opacity after full-step flux computation (DefaultStreaming)
 //          output: g_PriVar_Half_1PG, input: same array, B from g_PriVar_Half_1PG[MAG_OFFSET+*]

@@ -777,131 +777,146 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
 //-----------------------------------------------------------------------------------------
 // Function    : CR_TwoMomentFlux_FullStep
 //
-// Description : Compute full-step CR two-moment fluxes using half-step primitive variables
+// Description : Compute full-step CR two-moment fluxes using reconstructed face-centered values
 //
-// Note        : 1. Similar to half-step but uses primitive variables from Riemann predictor
-//               2. Uses NFlux as the stride for flux array access
+// Note        : 1. Uses g_FC_Var for reconstructed left/right states (Ec, Fc, rho, mom)
+//               2. Uses g_PriVar_Half for cell-centered values needed by vdiff (B, sigma_adv)
+//               3. Uses NFlux as the stride for flux array access
 //
 // Reference   : Athena++ cr_transport.cpp, cr_flux.cpp
 //
-// Parameter   : g_PriVar_Half : Array storing the input cell-centered, half-step primitive fluid variables
+// Parameter   : g_FC_Var      : Array storing the reconstructed face-centered conserved variables
+//               g_PriVar_Half : Array storing the cell-centered half-step primitive variables
+//                               (for B field and sigma_adv used by vdiff computation)
 //               g_FC_Flux     : Array with hydrodynamic fluxes for adding the cosmic-ray diffusive fluxes
 //               g_FC_B_Half   : Array storing the input face-centered, half-step magnetic field
 //               NFlux         : Stride for accessing g_FC_Flux[]
+//               NSkip_N       : Number of fluxes to skip at the beginning and end in the normal direction
+//               NSkip_T       : Number of fluxes to skip at the beginning and end in the transverse direction
 //               dh            : Cell size
 //               MicroPhy      : Microphysics object
 //
 // Return      : g_FC_Flux[]
 //-----------------------------------------------------------------------------------------
 GPU_DEVICE
-void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
+void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
+                                 const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                        real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                                  const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
-                                 const int NFlux, const real dh, const MicroPhy_t *MicroPhy )
+                                 const int NFlux, const int NSkip_N, const int NSkip_T,
+                                 const real dh, const MicroPhy_t *MicroPhy )
 {
+   const int  didx_fc[3]   = { 1, N_FC_VAR, SQR(N_FC_VAR) };
    const int  didx_pvar[3] = { 1, N_HF_VAR, SQR(N_HF_VAR) };
-   const int  flux_offset  = 0;  // no offset needed for full step
    const real _dh          = (real)1.0 / dh;
-   const int  half_offset  = ( N_HF_VAR - NFlux ) / 2;
+
+// offset from g_FC_Var index to g_PriVar_Half index
+// g_FC_Var has size N_FC_VAR, g_PriVar_Half has size N_HF_VAR
+// For MHM_RP with MHD: N_FC_VAR = PS2+2 = 18, N_HF_VAR = FLU_NXT-2
+   const int fc2pvar_offset = ( N_HF_VAR - N_FC_VAR ) / 2;
 
    for (int d=0; d<3; d++)
    {
+      const int faceL = 2*d;        // left face index
+      const int faceR = faceL + 1;  // right face index
       const int TDir1 = (d+1)%3;    // transverse direction 1
       const int TDir2 = (d+2)%3;    // transverse direction 2
 
       int sizeB_i, sizeB_j, stride_fc_B;
-      int size_i, size_j, size_k;
-      int i_offset, j_offset, k_offset;
-
-//    set up sizes for flux computation
-//    For MHD, we skip the boundary fluxes
-#     ifdef MHD
-      const int NSkip_N = 0;
-      const int NSkip_T = 0;
-#     else
-      const int NSkip_N = 0;
-      const int NSkip_T = 1;
-#     endif
+      int idx_fc_s[3], idx_flux_e[3];
 
       switch ( d )
       {
-         case 0 : size_i   = NFlux - 2*NSkip_N + 1;     size_j   = NFlux - 2*NSkip_T;        size_k   = NFlux - 2*NSkip_T;
-                  i_offset = NSkip_N;                   j_offset = NSkip_T;                  k_offset = NSkip_T;
-                  sizeB_i  = FLU_NXT_P1;                sizeB_j  = FLU_NXT;                  stride_fc_B = 1;
+         case 0 : idx_fc_s  [0] = NSkip_N;              idx_fc_s  [1] = NSkip_T;              idx_fc_s  [2] = NSkip_T;
+                  idx_flux_e[0] = N_FC_VAR-1-2*NSkip_N; idx_flux_e[1] = N_FC_VAR-2*NSkip_T;   idx_flux_e[2] = N_FC_VAR-2*NSkip_T;
+                  sizeB_i  = FLU_NXT_P1;                sizeB_j  = FLU_NXT;                   stride_fc_B = 1;
                   break;
 
-         case 1 : size_i   = NFlux - 2*NSkip_T;         size_j   = NFlux - 2*NSkip_N + 1;    size_k   = NFlux - 2*NSkip_T;
-                  i_offset = NSkip_T;                   j_offset = NSkip_N;                  k_offset = NSkip_T;
-                  sizeB_i  = FLU_NXT;                   sizeB_j  = FLU_NXT_P1;               stride_fc_B = FLU_NXT;
+         case 1 : idx_fc_s  [0] = NSkip_T;              idx_fc_s  [1] = NSkip_N;              idx_fc_s  [2] = NSkip_T;
+                  idx_flux_e[0] = N_FC_VAR-2*NSkip_T;   idx_flux_e[1] = N_FC_VAR-1-2*NSkip_N; idx_flux_e[2] = N_FC_VAR-2*NSkip_T;
+                  sizeB_i  = FLU_NXT;                   sizeB_j  = FLU_NXT_P1;                stride_fc_B = FLU_NXT;
                   break;
 
-         case 2 : size_i   = NFlux - 2*NSkip_T;         size_j   = NFlux - 2*NSkip_T;        size_k   = NFlux - 2*NSkip_N + 1;
-                  i_offset = NSkip_T;                   j_offset = NSkip_T;                  k_offset = NSkip_N;
-                  sizeB_i  = FLU_NXT;                   sizeB_j  = FLU_NXT;                  stride_fc_B = SQR(FLU_NXT);
+         case 2 : idx_fc_s  [0] = NSkip_T;              idx_fc_s  [1] = NSkip_T;              idx_fc_s  [2] = NSkip_N;
+                  idx_flux_e[0] = N_FC_VAR-2*NSkip_T;   idx_flux_e[1] = N_FC_VAR-2*NSkip_T;   idx_flux_e[2] = N_FC_VAR-1-2*NSkip_N;
+                  sizeB_i  = FLU_NXT;                   sizeB_j  = FLU_NXT;                   stride_fc_B = SQR(FLU_NXT);
                   break;
       } // switch ( d )
 
-      const int size_ij = size_i*size_j;
+      const int size_ij = idx_flux_e[0]*idx_flux_e[1];
 
-      CGPU_LOOP( idx, size_i*size_j*size_k )
+      CGPU_LOOP( idx, idx_flux_e[0]*idx_flux_e[1]*idx_flux_e[2] )
       {
 //       flux index
-         const int i_flux   = idx % size_i           + i_offset;
-         const int j_flux   = idx % size_ij / size_i + j_offset;
-         const int k_flux   = idx / size_ij          + k_offset;
+         const int i_flux   = idx % idx_flux_e[0];
+         const int j_flux   = idx % size_ij / idx_flux_e[0];
+         const int k_flux   = idx / size_ij;
          const int idx_flux = IDX321( i_flux, j_flux, k_flux, NFlux, NFlux );
 
-//       primitive variable index (with half_offset to account for different strides)
-         const int i_pvar   = i_flux + half_offset;
-         const int j_pvar   = j_flux + half_offset;
-         const int k_pvar   = k_flux + half_offset;
+//       face-centered variable index (for reconstructed values in g_FC_Var)
+         const int i_fc     = i_flux + idx_fc_s[0];
+         const int j_fc     = j_flux + idx_fc_s[1];
+         const int k_fc     = k_flux + idx_fc_s[2];
+         const int idx_fc   = IDX321( i_fc, j_fc, k_fc, N_FC_VAR, N_FC_VAR );
+
+//       primitive variable index (for cell-centered values in g_PriVar_Half, used by vdiff)
+         const int i_pvar   = i_fc + fc2pvar_offset;
+         const int j_pvar   = j_fc + fc2pvar_offset;
+         const int k_pvar   = k_fc + fc2pvar_offset;
          const int idx_pvar = IDX321( i_pvar, j_pvar, k_pvar, N_HF_VAR, N_HF_VAR );
 
 //       face-centered B index
          const int idx_fc_B = IDX321( i_pvar, j_pvar, k_pvar, sizeB_i, sizeB_j ) + stride_fc_B;
 
-//       get left and right cell indices
-         const int idx_L = idx_pvar;
-         const int idx_R = idx_pvar + didx_pvar[d];
+//       get left and right cell indices for cell-centered arrays (g_PriVar_Half)
+         const int idx_pvar_L = idx_pvar;
+         const int idx_pvar_R = idx_pvar + didx_pvar[d];
 
-//       1. get CR variables (left and right states) - primitive vars contain same CR fields
-//          Note: for primitive variables, CR_E stores energy density, CR_F stores flux
-         const real Ec_L   = g_PriVar_Half[CR_E ][idx_L];
-         const real Ec_R   = g_PriVar_Half[CR_E ][idx_R];
-         const real Fc_L[3] = { g_PriVar_Half[CR_F1][idx_L], g_PriVar_Half[CR_F2][idx_L], g_PriVar_Half[CR_F3][idx_L] };
-         const real Fc_R[3] = { g_PriVar_Half[CR_F1][idx_R], g_PriVar_Half[CR_F2][idx_R], g_PriVar_Half[CR_F3][idx_R] };
+//       1. get CR variables from RECONSTRUCTED face-centered values
+//          Left state:  right face of left cell  -> g_FC_Var[faceR][v][idx_fc]
+//          Right state: left face of right cell  -> g_FC_Var[faceL][v][idx_fc + didx_fc[d]]
+         const real Ec_L   = g_FC_Var[faceR][CR_E ][idx_fc];
+         const real Ec_R   = g_FC_Var[faceL][CR_E ][idx_fc + didx_fc[d]];
+         const real Fc_L[3] = { g_FC_Var[faceR][CR_F1][idx_fc], g_FC_Var[faceR][CR_F2][idx_fc], g_FC_Var[faceR][CR_F3][idx_fc] };
+         const real Fc_R[3] = { g_FC_Var[faceL][CR_F1][idx_fc + didx_fc[d]], g_FC_Var[faceL][CR_F2][idx_fc + didx_fc[d]], g_FC_Var[faceL][CR_F3][idx_fc + didx_fc[d]] };
 
-//       2. get density and velocity (primitive variables)
-//          Note: primitive array layout is [DENS=0, VelX=1, VelY=2, VelZ=3, ...]
-         const real rho_L = g_PriVar_Half[DENS][idx_L];
-         const real rho_R = g_PriVar_Half[DENS][idx_R];
-         const real v_L   = g_PriVar_Half[1+d][idx_L];
-         const real v_R   = g_PriVar_Half[1+d][idx_R];
+//       2. get density and velocity from RECONSTRUCTED face-centered values
+//          g_FC_Var stores conserved variables (density and momentum), so compute velocity = mom/rho
+         const real rho_L = g_FC_Var[faceR][DENS][idx_fc];
+         const real rho_R = g_FC_Var[faceL][DENS][idx_fc + didx_fc[d]];
+         const real v_L   = g_FC_Var[faceR][MOMX+d][idx_fc] / rho_L;
+         const real v_R   = g_FC_Var[faceL][MOMX+d][idx_fc + didx_fc[d]] / rho_R;
 
-//       3. get cell-centered magnetic field for left and right cells
+//       3. get cell-centered magnetic field for left and right cells (for vdiff computation)
 //          Cell-centered B is stored after MAG_OFFSET in primitive variables
-         const real Bx_L = g_PriVar_Half[MAG_OFFSET+0][idx_L];
-         const real By_L = g_PriVar_Half[MAG_OFFSET+1][idx_L];
-         const real Bz_L = g_PriVar_Half[MAG_OFFSET+2][idx_L];
+//          Use donor-cell (cell-centered) values for vdiff, not reconstructed values
+         const real Bx_L = g_PriVar_Half[MAG_OFFSET+0][idx_pvar_L];
+         const real By_L = g_PriVar_Half[MAG_OFFSET+1][idx_pvar_L];
+         const real Bz_L = g_PriVar_Half[MAG_OFFSET+2][idx_pvar_L];
          
-         const real Bx_R = g_PriVar_Half[MAG_OFFSET+0][idx_R];
-         const real By_R = g_PriVar_Half[MAG_OFFSET+1][idx_R];
-         const real Bz_R = g_PriVar_Half[MAG_OFFSET+2][idx_R];
+         const real Bx_R = g_PriVar_Half[MAG_OFFSET+0][idx_pvar_R];
+         const real By_R = g_PriVar_Half[MAG_OFFSET+1][idx_pvar_R];
+         const real Bz_R = g_PriVar_Half[MAG_OFFSET+2][idx_pvar_R];
 
 //       4. READ sigma_adv from stored fields (computed at init or previous flux call)
-//          Use cell-centered values directly (not averaged)
-         const real sigma_adv_L = g_PriVar_Half[ADV_SIGMA][idx_L];
-         const real sigma_adv_R = g_PriVar_Half[ADV_SIGMA][idx_R];
+//          Use cell-centered values directly (not averaged) for vdiff computation
+         const real sigma_adv_L = g_PriVar_Half[ADV_SIGMA][idx_pvar_L];
+         const real sigma_adv_R = g_PriVar_Half[ADV_SIGMA][idx_pvar_R];
 
 //       5. get CR parameters
          const real vmax = MicroPhy->CR_vmax;
 
 //       6. compute v_diff at cell centers using the new helper function
-//          vdiff_L is computed from LEFT cell's cell-centered data
-//          vdiff_R is computed from RIGHT cell's cell-centered data
+//          vdiff_L is computed from LEFT cell's cell-centered data (donor-cell)
+//          vdiff_R is computed from RIGHT cell's cell-centered data (donor-cell)
 //          This matches Athena++ pattern: vdiff_l_(i) = v_diff[i-1], vdiff_r_(i) = v_diff[i]
-         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_L, rho_L, vmax, dh, d );
-         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_R, rho_R, vmax, dh, d );
+//          Use cell-centered Ec and rho from g_PriVar_Half for vdiff (not reconstructed)
+         const real Ec_cc_L  = g_PriVar_Half[CR_E][idx_pvar_L];
+         const real Ec_cc_R  = g_PriVar_Half[CR_E][idx_pvar_R];
+         const real rho_cc_L = g_PriVar_Half[DENS][idx_pvar_L];
+         const real rho_cc_R = g_PriVar_Half[DENS][idx_pvar_R];
+         const real vdiff_L = CR_ComputeVdiff( sigma_adv_L, Bx_L, By_L, Bz_L, Ec_cc_L, rho_cc_L, vmax, dh, d );
+         const real vdiff_R = CR_ComputeVdiff( sigma_adv_R, Bx_R, By_R, Bz_R, Ec_cc_R, rho_cc_R, vmax, dh, d );
 
 //       7. compute HLLE flux
          real flux_E, flux_F[3];
@@ -914,7 +929,7 @@ void CR_TwoMomentFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          g_FC_Flux[d][CR_F2][idx_flux] = flux_F[1];
          g_FC_Flux[d][CR_F3][idx_flux] = flux_F[2];
 
-      } // CGPU_LOOP( idx, size_i*size_j*size_k )
+      } // CGPU_LOOP( idx, idx_flux_e[0]*idx_flux_e[1]*idx_flux_e[2] )
    } // for (int d=0; d<3; d++)
 
 

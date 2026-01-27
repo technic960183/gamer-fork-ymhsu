@@ -181,7 +181,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
                        const int NFlux, const int NVar_Out, const int NVar_In, const int NVar_B,
                        const int out_offset, const int in_offset,
                        const real dh, const MicroPhy_t *MicroPhy );
-void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+void CR_UpdateOpacity( real *g_Output,
+                       const int OutStride,
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
                        const int NVar_Out, const int NVar_In, const int NVar_B,
                        const int out_offset, const int in_offset, const int NSize,
@@ -659,11 +660,10 @@ void CPU_FluidSolver_MHM(
 #           endif
             {
             const int pvar_offset = ( N_HF_VAR - PS2 ) / 2;
-//          Note: g_Flu_Array_Out has size CUBE(PS2), cast to CUBE(FLU_NXT) for function signature
-//                The function internally handles the correct indexing via NVar_Out=PS2
-            real (*g_Out_cast)[CUBE(FLU_NXT)] = reinterpret_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_Out[P]);
-            CR_UpdateOpacity( g_Out_cast, g_PriVar_Half_1PG+MAG_OFFSET,
-                              PS2, PS2, N_HF_VAR, 0, pvar_offset, PS2, dh, &MicroPhy );
+//          Note: g_Flu_Array_Out has size CUBE(PS2), pass as flat pointer with correct stride
+            CR_UpdateOpacity( reinterpret_cast<real*>(g_Flu_Array_Out[P]), CUBE(PS2),
+                              g_PriVar_Half_1PG+MAG_OFFSET,
+                              PS2, PS2, N_HF_VAR, 0, 0, PS2, dh, &MicroPhy );
             }
 #           endif
 
@@ -1045,8 +1045,10 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #  ifdef __CUDACC__
    __syncthreads();
 #  endif
-   CR_UpdateOpacity( g_PriVar_Half, g_PriVar_Half+MAG_OFFSET,
-                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 0, 0, N_HF_VAR, dh, MicroPhy );
+// NSize=N_HF_VAR-2 (interior cells), out_offset=1 (skip boundary), in_offset=1
+   CR_UpdateOpacity( reinterpret_cast<real*>(g_PriVar_Half), CUBE(FLU_NXT),
+                     g_PriVar_Half+MAG_OFFSET,
+                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 1, 1, N_HF_VAR-2, dh, MicroPhy );
 #  endif
 
 #  ifdef __CUDACC__

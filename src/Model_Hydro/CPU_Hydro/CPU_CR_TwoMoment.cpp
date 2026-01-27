@@ -314,10 +314,11 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 //               4. The sigma_adv and v_adv computed here will be used in the NEXT timestep's
 //                  flux calculation
 //
-// Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
+// Parameter   : g_Output     : Flat pointer to the output array for updated opacity
+//               OutStride    : Stride between variables in g_Output (CUBE(FLU_NXT) or CUBE(PS2))
 //               g_CC_B       : Array storing cell-centered B field [3][ CUBE(N) ]
-//               NVar_Out     : Stride for accessing g_Output[] (FLU_NXT, N_HF_VAR, or PS2)
-//               NVar_In      : Stride for accessing g_Output[] for neighbor access
+//               NVar_Out     : Size for computing output indices (FLU_NXT, N_HF_VAR, or PS2)
+//               NVar_In      : Size for computing input indices for neighbor access
 //               NVar_B       : Stride for accessing g_CC_B[] (FLU_NXT or N_HF_VAR)
 //               out_offset   : Offset for output index relative to interior
 //               in_offset    : Offset for input index relative to interior
@@ -330,7 +331,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 // Reference   : Athena++ src/cr/cr.cpp DefaultOpacity()
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
-void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
+void CR_UpdateOpacity( real *g_Output,
+                       const int OutStride,
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
                        const int NVar_Out, const int NVar_In, const int NVar_B,
                        const int out_offset, const int in_offset, const int NSize,
@@ -339,22 +341,18 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
    const real vmax   = MicroPhy->CR_vmax;
    const real invlim = (real)1.0 / vmax;
    const real _2dh   = (real)0.5 / dh;
-   const int  cell_offset = 1;  // skip boundary cells
 
-// loop bounds for interior cells
-   const int cell_size_i  = NSize - 2*cell_offset;
-   const int cell_size_j  = NSize - 2*cell_offset;
-   const int cell_size_k  = NSize - 2*cell_offset;
-   const int cell_size_ij = cell_size_i * cell_size_j;
+// loop bounds: NSize already accounts for boundary cells (caller provides NSize-2)
+   const int size_ij = NSize * NSize;
 
-   CGPU_LOOP( idx_cell, cell_size_i*cell_size_j*cell_size_k )
+   CGPU_LOOP( idx_cell, NSize*NSize*NSize )
    {
 //    cell indices within the loop region
-      const int i_cell = idx_cell % cell_size_i + cell_offset;
-      const int j_cell = idx_cell % cell_size_ij / cell_size_i + cell_offset;
-      const int k_cell = idx_cell / cell_size_ij + cell_offset;
+      const int i_cell = idx_cell % NSize;
+      const int j_cell = idx_cell % size_ij / NSize;
+      const int k_cell = idx_cell / size_ij;
 
-//    output indices (with out_offset)
+//    output indices (with out_offset, caller adds +1 for boundary skip)
       const int i_out = i_cell + out_offset;
       const int j_out = j_cell + out_offset;
       const int k_out = k_cell + out_offset;
@@ -381,13 +379,13 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
 //    Pc = Ec / 3, so grad(Pc) = (1/3) * grad(Ec)
 //    Following Athena++: dprdx = (Ec[i+1] - Ec[i-1]) / 3.0 / (2*dx)
       real grad_pc[3];
-      grad_pc[0] = ( g_Output[CR_E][idx_ip1] - g_Output[CR_E][idx_im1] ) / (real)3.0 * _2dh;
-      grad_pc[1] = ( g_Output[CR_E][idx_jp1] - g_Output[CR_E][idx_jm1] ) / (real)3.0 * _2dh;
-      grad_pc[2] = ( g_Output[CR_E][idx_kp1] - g_Output[CR_E][idx_km1] ) / (real)3.0 * _2dh;
+      grad_pc[0] = ( g_Output[CR_E*OutStride + idx_ip1] - g_Output[CR_E*OutStride + idx_im1] ) / (real)3.0 * _2dh;
+      grad_pc[1] = ( g_Output[CR_E*OutStride + idx_jp1] - g_Output[CR_E*OutStride + idx_jm1] ) / (real)3.0 * _2dh;
+      grad_pc[2] = ( g_Output[CR_E*OutStride + idx_kp1] - g_Output[CR_E*OutStride + idx_km1] ) / (real)3.0 * _2dh;
 
 //    get cell-centered values
-      const real Ec  = g_Output[CR_E ][idx_in];
-      const real rho = g_Output[DENS][idx_in];
+      const real Ec  = g_Output[CR_E*OutStride + idx_in];
+      const real rho = g_Output[DENS*OutStride + idx_in];
 
 //    get B field from g_CC_B array
       const real Bx = g_CC_B[0][idx_B];
@@ -430,10 +428,10 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
       }
 
 //    store updated values
-      g_Output[ADV_SIGMA][idx_out] = sigma_adv;
-      g_Output[ADV_VX   ][idx_out] = v_adv[0];
-      g_Output[ADV_VY   ][idx_out] = v_adv[1];
-      g_Output[ADV_VZ   ][idx_out] = v_adv[2];
+      g_Output[ADV_SIGMA*OutStride + idx_out] = sigma_adv;
+      g_Output[ADV_VX   *OutStride + idx_out] = v_adv[0];
+      g_Output[ADV_VY   *OutStride + idx_out] = v_adv[1];
+      g_Output[ADV_VZ   *OutStride + idx_out] = v_adv[2];
 
    } // CGPU_LOOP
 

@@ -260,6 +260,10 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
       case 1: r_plus = y + dh; r_minus = y - dh; break;
       case 2: r_plus = z + dh; r_minus = z - dh; break;
    }
+
+// Simulate outflow boundary conditions
+   r_plus -= (r_plus > amr->BoxEdgeR[CR_Streaming_Dir]) ? dh : 0.0;
+   r_minus += (r_minus < amr->BoxEdgeL[CR_Streaming_Dir]) ? dh : 0.0;
    
    const double Ec_plus  = CR_TriangularProfile_Ec( r_plus,  center );
    const double Ec_minus = CR_TriangularProfile_Ec( r_minus, center );

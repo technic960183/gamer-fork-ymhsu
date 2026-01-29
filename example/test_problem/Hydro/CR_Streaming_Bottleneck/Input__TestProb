@@ -1,0 +1,4 @@
+# problem-specific runtime parameters (Sec 4.1.3: bottleneck - CRs injected from -x into a cold cloud)
+CR_Streaming_Test        4              # 4 = 1D density cloud (bottleneck)
+CR_Streaming_Dir         0              # streaming axis = x
+CR_Streaming_FlowV       0.0

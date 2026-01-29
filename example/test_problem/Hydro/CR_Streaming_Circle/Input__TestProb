@@ -1,0 +1,4 @@
+# problem-specific runtime parameters (Sec 4.1.5: 2D anisotropic diffusion along circular B field lines)
+CR_Streaming_Test        3              # 3 = 2D ring Ec, circular B
+CR_Streaming_Dir         0              # unused for the 2D tests
+CR_Streaming_FlowV       0.0

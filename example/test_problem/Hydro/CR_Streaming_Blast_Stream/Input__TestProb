@@ -1,0 +1,4 @@
+# problem-specific runtime parameters (Sec 4.2.3: 2D CR-driven blast wave, streaming case)
+CR_Streaming_Test        6              # 6 = 2D CR-driven blast wave
+CR_Streaming_Dir         0              # unused for the 2D tests
+CR_Streaming_FlowV       0.0

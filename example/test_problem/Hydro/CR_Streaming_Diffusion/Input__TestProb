@@ -1,0 +1,4 @@
+# problem-specific runtime parameters (Sec 4.1.4: 1D CR diffusion of a Gaussian)
+CR_Streaming_Test        1              # 1 = 1D Gaussian Ec profile
+CR_Streaming_Dir         0              # diffusion axis (0/1/2 = x/y/z)
+CR_Streaming_FlowV       0.0            # set to 1.0 for the moving-fluid diffusion test (Fig. 6 right)

@@ -1,0 +1,4 @@
+# problem-specific runtime parameters (Sec 4.2.1: 1D CR-driven wave, full MHD+CR coupling)
+CR_Streaming_Test        5              # 5 = 1D CR-driven wave
+CR_Streaming_Dir         0              # streaming axis = x
+CR_Streaming_FlowV       0.0

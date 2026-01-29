@@ -471,6 +471,20 @@ void CPU_FluidSolver_MHM(
 #        endif
 #        endif // #ifdef MHD
 
+#        ifdef CR_STREAMING
+//       update opacity before half-step flux computation
+//       Uses CENTRAL DIFFERENCE grad(Pc) - requires ±1 neighbors
+//       output: g_Flu_Array_In[P] (via const_cast), input: same array, B from g_PriVar_1PG+MAG_OFFSET
+         {
+         real (*g_Flu_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_In[P]);
+         CR_UpdateOpacity( reinterpret_cast<real*>(g_Flu_mod), CUBE(FLU_NXT),
+                           g_PriVar_1PG+MAG_OFFSET,
+                           FLU_NXT, FLU_NXT, FLU_NXT, 1, 1, FLU_NXT-2, dh, &MicroPhy );
+         }
+#        ifdef __CUDACC__
+         __syncthreads();
+#        endif
+#        endif // #ifdef CR_STREAMING
 
 //       1-a-2. evaluate the half-step first-order fluxes by Riemann solver
 //       hydrodynamic fluxes
@@ -651,20 +665,7 @@ void CPU_FluidSolver_MHM(
                                          dt, dh, &EoS, &MicroPhy );
 
 //          update opacity after full-step source computation (DefaultOpacity)
-//          Uses CENTRAL DIFFERENCE grad(Pc) for next timestep's flux calculation
-//          output: g_Flu_Array_Out[P], input: same array for Ec neighbors, B from g_PriVar_Half_1PG+MAG_OFFSET
-//          TODO: B field should be from updated cell-centered B at full time-step (via MHD_GetCellCenteredBField
-//                from g_Mag_Array_Out). Currently using g_PriVar_Half_1PG+MAG_OFFSET as a temporary solution.
-#           ifdef __CUDACC__
-            __syncthreads();
-#           endif
-            {
-            const int pvar_offset = ( N_HF_VAR - PS2 ) / 2;
-//          Note: g_Flu_Array_Out has size CUBE(PS2), pass as flat pointer with correct stride
-            CR_UpdateOpacity( reinterpret_cast<real*>(g_Flu_Array_Out[P]), CUBE(PS2),
-                              g_PriVar_Half_1PG+MAG_OFFSET,
-                              PS2, PS2, N_HF_VAR, 0, 0, PS2, dh, &MicroPhy );
-            }
+//          CR_UpdateOpacity() has been moved to before half-step flux computation (step 1-a-1)
 #           endif
 
 
@@ -1048,7 +1049,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 // NSize=N_HF_VAR-2 (interior cells), out_offset=1 (skip boundary), in_offset=1
    CR_UpdateOpacity( reinterpret_cast<real*>(g_PriVar_Half), CUBE(FLU_NXT),
                      g_PriVar_Half+MAG_OFFSET,
-                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 1, 1, N_HF_VAR-2, dh, MicroPhy );
+                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 0, 0, N_HF_VAR, dh, MicroPhy );
 #  endif
 
 #  ifdef __CUDACC__

@@ -236,6 +236,14 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 #  endif
 
 
+// 1.10 CRITERION TEN : cosmic ray streaming reduce speed of light
+// =============================================================================================================
+#  ifdef CR_STREAMING
+   dTime[NdTime] = dTime_dt * MicroPhy.CR_safety * amr->dh[lv] / MicroPhy.CR_vmax;
+   sprintf( dTime_Name[NdTime++], "%s", "CR_Stream" );
+#  endif
+
+
 
 // 2. get the minimum time-step from all criteria
 // =============================================================================================================

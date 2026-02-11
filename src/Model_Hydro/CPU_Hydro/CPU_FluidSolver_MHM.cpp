@@ -38,6 +38,9 @@
 #ifdef CR_DIFFUSION
 # include "../../Microphysics/CosmicRayDiffusion/CUFLU_CR_AddDiffuseFlux.cu"
 #endif
+#ifdef CR_STREAMING
+# include "CUFLU_CR_TwoMoment.cu"
+#endif
 #endif // #ifdef COSMIC_RAY
 
 #else // #ifdef __CUDACC__

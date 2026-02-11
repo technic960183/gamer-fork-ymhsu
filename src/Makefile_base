@@ -382,10 +382,10 @@ endif # CR_DIFFUSION
 ifeq "$(filter -DCR_STREAMING, $(SIMU_OPTION))" "-DCR_STREAMING"
 CPU_FILE    += CPU_CR_TwoMoment.cpp
 
-# GPU_FILE    +=
+GPU_FILE    += CUFLU_CR_TwoMoment.cu
 
-vpath %.cpp    CPU_CR_TwoMoment.cpp
-# vpath %.cu
+vpath %.cpp    Model_Hydro/CPU_Hydro
+vpath %.cu     Model_Hydro/GPU_Hydro
 endif # CR_STREAMING
 
 

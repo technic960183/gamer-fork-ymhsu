@@ -303,7 +303,7 @@ static void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #ifdef __CUDACC__
 __global__
 void CUFLU_FluidSolver_MHM(
-   const real   g_Flu_Array_In [][NCOMP_TOTAL][ CUBE(FLU_NXT) ],
+         real   g_Flu_Array_In [][NCOMP_TOTAL][ CUBE(FLU_NXT) ],
          real   g_Flu_Array_Out[][NCOMP_TOTAL][ CUBE(PS2) ],
    const real   g_Mag_Array_In [][NCOMP_MAG][ FLU_NXT_P1*SQR(FLU_NXT) ],
          real   g_Mag_Array_Out[][NCOMP_MAG][ PS2P1*SQR(PS2) ],
@@ -331,7 +331,7 @@ void CUFLU_FluidSolver_MHM(
    const EoS_t EoS, const MicroPhy_t MicroPhy )
 #else
 void CPU_FluidSolver_MHM(
-   const real   g_Flu_Array_In [][NCOMP_TOTAL][ CUBE(FLU_NXT) ],
+         real   g_Flu_Array_In [][NCOMP_TOTAL][ CUBE(FLU_NXT) ],
          real   g_Flu_Array_Out[][NCOMP_TOTAL][ CUBE(PS2) ],
    const real   g_Mag_Array_In [][NCOMP_MAG][ FLU_NXT_P1*SQR(FLU_NXT) ],
          real   g_Mag_Array_Out[][NCOMP_MAG][ PS2P1*SQR(PS2) ],
@@ -477,13 +477,10 @@ void CPU_FluidSolver_MHM(
 #        ifdef CR_STREAMING
 //       update opacity before half-step flux computation
 //       Uses CENTRAL DIFFERENCE grad(Pc) - requires ±1 neighbors
-//       output: g_Flu_Array_In[P] (via const_cast), input: same array, B from g_PriVar_1PG+MAG_OFFSET
-         {
-         real (*g_Flu_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_In[P]);
-         CR_UpdateOpacity( reinterpret_cast<real*>(g_Flu_mod), CUBE(FLU_NXT),
+//       output: g_Flu_Array_In[P], input: same array, B from g_PriVar_1PG+MAG_OFFSET
+         CR_UpdateOpacity( reinterpret_cast<real*>(g_Flu_Array_In[P]), CUBE(FLU_NXT),
                            g_PriVar_1PG+MAG_OFFSET,
                            FLU_NXT, FLU_NXT, FLU_NXT, 1, 1, FLU_NXT-2, dh, &MicroPhy );
-         }
 #        ifdef __CUDACC__
          __syncthreads();
 #        endif
@@ -504,15 +501,12 @@ void CPU_FluidSolver_MHM(
          CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_Mag_Array_In[P], g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
 
 //       update streaming velocity/opacity after half-step flux computation (DefaultStreaming)
-//       output: g_Flu_Array_In[P] (via const_cast), input: same array, B from g_PriVar_1PG+MAG_OFFSET
+//       output: g_Flu_Array_In[P], input: same array, B from g_PriVar_1PG+MAG_OFFSET
 #        ifdef __CUDACC__
          __syncthreads();
 #        endif
-         {
-         real (*g_Flu_mod)[CUBE(FLU_NXT)] = const_cast<real (*)[CUBE(FLU_NXT)]>(g_Flu_Array_In[P]);
-         CR_UpdateStreaming( g_Flu_mod, g_Flu_Array_In[P], g_PriVar_1PG+MAG_OFFSET,
+         CR_UpdateStreaming( g_Flu_Array_In[P], g_Flu_Array_In[P], g_PriVar_1PG+MAG_OFFSET,
                              g_Flux_Half_1PG, N_HF_FLUX, FLU_NXT, FLU_NXT, FLU_NXT, 0, 0, dh, &MicroPhy );
-         }
 #        ifdef __CUDACC__
          __syncthreads();
 #        endif

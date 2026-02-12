@@ -513,6 +513,9 @@ void CPU_FluidSolver_MHM(
          CR_UpdateStreaming( g_Flu_mod, g_Flu_Array_In[P], g_PriVar_1PG+MAG_OFFSET,
                              g_Flux_Half_1PG, N_HF_FLUX, FLU_NXT, FLU_NXT, FLU_NXT, 0, 0, dh, &MicroPhy );
          }
+#        ifdef __CUDACC__
+         __syncthreads();
+#        endif
 #        endif
 
 
@@ -624,6 +627,9 @@ void CPU_FluidSolver_MHM(
             CR_UpdateStreaming( g_PriVar_Half_1PG, g_PriVar_Half_1PG, g_PriVar_Half_1PG+MAG_OFFSET,
                                 g_FC_Flux_1PG, N_FL_FLUX, N_HF_VAR, N_HF_VAR, N_HF_VAR, half_offset, half_offset, dh, &MicroPhy );
             }
+#           ifdef __CUDACC__
+            __syncthreads();
+#           endif
 #           endif
 
 
@@ -1052,7 +1058,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 // NSize=N_HF_VAR-2 (interior cells), out_offset=1 (skip boundary), in_offset=1
    CR_UpdateOpacity( reinterpret_cast<real*>(g_PriVar_Half), CUBE(FLU_NXT),
                      g_PriVar_Half+MAG_OFFSET,
-                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 0, 0, N_HF_VAR, dh, MicroPhy );
+                     N_HF_VAR, N_HF_VAR, N_HF_VAR, 1, 1, N_HF_VAR-2, dh, MicroPhy );
 #  endif
 
 #  ifdef __CUDACC__

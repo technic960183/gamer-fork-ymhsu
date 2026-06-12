@@ -988,6 +988,13 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
          out_con[v] = g_ConVar_In[v][idx_in] - dt_dh2*( dflux[0][v] + dflux[1][v] + dflux[2][v] );
 
 
+//    compute the cell-centered half-step B field
+//    --> must be done BEFORE CR_TwoMomentSource_HalfStep(), which reads out_con[MAG_OFFSET+MAGX/Y/Z]
+#     ifdef MHD
+      MHD_GetCellCenteredBField( out_con+MAG_OFFSET, g_FC_B_Half[0], g_FC_B_Half[1], g_FC_B_Half[2],
+                                 N_HF_VAR, N_HF_VAR, N_HF_VAR, i_out, j_out, k_out );
+#     endif
+
 //    add the cosmic-ray source term of adiabatic work
 #     ifdef COSMIC_RAY
       CR_AdiabaticWork_HalfStep_MHM_RP( out_con, g_ConVar_In, g_Flux_Half, idx_in, didx_in,
@@ -997,13 +1004,6 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #     ifdef CR_STREAMING
       CR_TwoMomentSource_HalfStep( out_con, g_ConVar_In, g_Flux_Half, idx_in, didx_in,
                                    idx_flux, didx_flux, dt, dh, EoS, MicroPhy );
-#     endif
-
-
-//    compute the cell-centered half-step B field
-#     ifdef MHD
-      MHD_GetCellCenteredBField( out_con+MAG_OFFSET, g_FC_B_Half[0], g_FC_B_Half[1], g_FC_B_Half[2],
-                                 N_HF_VAR, N_HF_VAR, N_HF_VAR, i_out, j_out, k_out );
 #     endif
 
 //    apply density and internal energy floors

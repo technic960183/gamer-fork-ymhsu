@@ -405,6 +405,9 @@ extern bool   CR_STREAM;
 extern double CR_VMAX;
 extern double CR_SIGMA;
 extern double CR_MAX_OPACITY;
+extern double CR_TAU_ASYM_LIM;
+extern double CR_TAUFACT;
+extern bool   CR_VEL_FLX_FLAG;
 #endif
 
 

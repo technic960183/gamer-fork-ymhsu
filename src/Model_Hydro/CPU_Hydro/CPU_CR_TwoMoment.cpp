@@ -4,12 +4,6 @@
 
 
 
-// global constants for CR streaming
-// --> will be moved to input parameters later
-static const real CR_TAU_ASYM_LIM   = (real)1.0e-3;   // optical depth limit for asymptotic expansion
-static const real CR_TAUFACT        = (real)1.0;      // tau factor for optical depth calculation
-static const int  CR_VEL_FLX_FLAG   = 0;              // flag to add CR sound speed to v_diff
-
 
 //-------------------------------------------------------------------------------------------------------
 // Function    : RotateVec
@@ -455,7 +449,8 @@ void CR_UpdateOpacity( real *g_Output,
 //               vmax        : effective speed of light
 //               dh          : cell size
 //               fdir        : flux direction (0=x, 1=y, 2=z)
-//               MicroPhy    : Microphysics object containing CR_sigma and CR_max_opacity
+//               MicroPhy    : Microphysics object containing CR_sigma, CR_max_opacity,
+//                             CR_taufact, CR_tau_asym_lim, and CR_vel_flx_flag
 //
 // Return      : v_diff along the specified direction (fdir)
 //
@@ -484,28 +479,28 @@ static real CR_ComputeVdiff( const real sigma_adv,
 
 // compute tau and diffv for each B-aligned direction
 // x direction (parallel to B)
-   real tau_x = CR_TAUFACT * sigma_x * dh;
+   real tau_x = MicroPhy->CR_taufact * sigma_x * dh;
    tau_x = tau_x * tau_x / ( (real)2.0 * edd );
    real diffv_x;
-   if ( tau_x < CR_TAU_ASYM_LIM )
+   if ( tau_x < MicroPhy->CR_tau_asym_lim )
       diffv_x = SQRT( (real)1.0 - (real)0.5 * tau_x );
    else
       diffv_x = SQRT( ( (real)1.0 - EXP(-tau_x) ) / tau_x );
 
 // y direction (perpendicular to B)
-   real tau_y = CR_TAUFACT * sigma_y * dh;
+   real tau_y = MicroPhy->CR_taufact * sigma_y * dh;
    tau_y = tau_y * tau_y / ( (real)2.0 * edd );
    real diffv_y;
-   if ( tau_y < CR_TAU_ASYM_LIM )
+   if ( tau_y < MicroPhy->CR_tau_asym_lim )
       diffv_y = SQRT( (real)1.0 - (real)0.5 * tau_y );
    else
       diffv_y = SQRT( ( (real)1.0 - EXP(-tau_y) ) / tau_y );
 
 // z direction (perpendicular to B)
-   real tau_z = CR_TAUFACT * sigma_z * dh;
+   real tau_z = MicroPhy->CR_taufact * sigma_z * dh;
    tau_z = tau_z * tau_z / ( (real)2.0 * edd );
    real diffv_z;
-   if ( tau_z < CR_TAU_ASYM_LIM )
+   if ( tau_z < MicroPhy->CR_tau_asym_lim )
       diffv_z = SQRT( (real)1.0 - (real)0.5 * tau_z );
    else
       diffv_z = SQRT( ( (real)1.0 - EXP(-tau_z) ) / tau_z );
@@ -524,7 +519,7 @@ static real CR_ComputeVdiff( const real sigma_adv,
    vdiff_Bz = FABS( vdiff_Bz );
 
 // add CR sound speed for stability
-   const real cr_sound = CR_VEL_FLX_FLAG * SQRT( ((real)4.0/(real)9.0) * Ec / rho );
+   const real cr_sound = MicroPhy->CR_vel_flx_flag * SQRT( ((real)4.0/(real)9.0) * Ec / rho );
    vdiff_Bx += cr_sound;
    vdiff_By += cr_sound;
    vdiff_Bz += cr_sound;

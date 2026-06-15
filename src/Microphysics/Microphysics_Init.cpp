@@ -39,6 +39,9 @@ void Microphysics_Init()
    MicroPhy.CR_vmax            = CR_VMAX;
    MicroPhy.CR_sigma           = CR_SIGMA;
    MicroPhy.CR_max_opacity     = CR_MAX_OPACITY;
+   MicroPhy.CR_tau_asym_lim    = CR_TAU_ASYM_LIM;
+   MicroPhy.CR_taufact         = CR_TAUFACT;
+   MicroPhy.CR_vel_flx_flag    = CR_VEL_FLX_FLAG;
 #  endif // #ifdef CR_STREAMING
 
    MicroPhy_Initialized = true;

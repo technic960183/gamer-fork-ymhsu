@@ -24,6 +24,9 @@
 //                CR_vmax            : Maximum velocity (effective speed of light) (runtime parameter: CR_VMAX)
 //                CR_sigma           : Diffusion coefficient (runtime parameter: CR_OPACITY)
 //                CR_max_opacity     : Maximum opacity for cosmic-ray streaming (runtime parameter: CR_MAX_OPACITY)
+//                CR_tau_asym_lim    : Optical depth limit for asymptotic expansion (runtime parameter: CR_TAU_ASYM_LIM)
+//                CR_taufact         : Tau factor for optical depth calculation (runtime parameter: CR_TAUFACT)
+//                CR_vel_flx_flag    : Flag to add CR sound speed to v_diff (runtime parameter: CR_VEL_FLX_FLAG)
 //
 // Method      :  None --> It seems that CUDA does not support functions in a struct
 //-------------------------------------------------------------------------------------------------------
@@ -43,6 +46,9 @@ struct MicroPhy_t
    real CR_vmax;
    real CR_sigma;
    real CR_max_opacity;
+   real CR_tau_asym_lim;
+   real CR_taufact;
+   bool CR_vel_flx_flag;
 #  endif
 
 // somehow the structure itself cannot be empty, so we declare a useless bool variable to avoid the issue

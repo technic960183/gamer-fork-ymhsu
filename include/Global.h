@@ -408,6 +408,7 @@ extern double CR_MAX_OPACITY;
 extern double CR_TAU_ASYM_LIM;
 extern double CR_TAUFACT;
 extern bool   CR_VEL_FLX_FLAG;
+extern double CR_CFL;
 #endif
 
 

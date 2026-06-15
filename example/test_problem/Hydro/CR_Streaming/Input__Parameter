@@ -139,6 +139,7 @@ CR_MAX_OPACITY                1e10        # Maximum opacity for cosmic-ray strea
 CR_TAU_ASYM_LIM               1e-3        # optical depth limit for asymptotic expansion [1e-3] ##CR_STREAMING only##
 CR_TAUFACT                    1.0         # tau factor for optical depth calculation [1.0] ##CR_STREAMING only##
 CR_VEL_FLX_FLAG               0           # add CR sound speed to v_diff [0/1] ##CR_STREAMING only##
+CR_CFL                        0.3         # CFL safety factor for cosmic-ray streaming time-step [0.3] ##CR_STREAMING only##
 
 # fluid solver in HYDRO (MODEL==HYDRO only)
 GAMMA                         1.666666667 # ratio of specific heats (i.e., adiabatic index) [5.0/3.0] ##EOS_GAMMA ONLY##

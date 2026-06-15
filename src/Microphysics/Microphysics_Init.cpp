@@ -42,6 +42,7 @@ void Microphysics_Init()
    MicroPhy.CR_tau_asym_lim    = CR_TAU_ASYM_LIM;
    MicroPhy.CR_taufact         = CR_TAUFACT;
    MicroPhy.CR_vel_flx_flag    = CR_VEL_FLX_FLAG;
+   MicroPhy.CR_cfl             = CR_CFL;
 #  endif // #ifdef CR_STREAMING
 
    MicroPhy_Initialized = true;

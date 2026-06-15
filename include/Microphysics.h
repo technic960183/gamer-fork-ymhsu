@@ -23,6 +23,7 @@
 //                CR_stream          : Flag for enabling cosmic-ray streaming (runtime parameter: CR_STREAM)
 //                CR_vmax            : Maximum velocity (effective speed of light) (runtime parameter: CR_VMAX)
 //                CR_sigma           : Diffusion coefficient (runtime parameter: CR_OPACITY)
+//                CR_sigma_perp      : Perpendicular diffusion coefficient (runtime parameter: CR_SIGMA_PERP)
 //                CR_max_opacity     : Maximum opacity for cosmic-ray streaming (runtime parameter: CR_MAX_OPACITY)
 //                CR_tau_asym_lim    : Optical depth limit for asymptotic expansion (runtime parameter: CR_TAU_ASYM_LIM)
 //                CR_taufact         : Tau factor for optical depth calculation (runtime parameter: CR_TAUFACT)
@@ -46,6 +47,7 @@ struct MicroPhy_t
    bool CR_stream;
    real CR_vmax;
    real CR_sigma;
+   real CR_sigma_perp;
    real CR_max_opacity;
    real CR_tau_asym_lim;
    real CR_taufact;

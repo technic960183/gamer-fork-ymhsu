@@ -135,6 +135,7 @@ CR_SOURCE                     0           # Include source feedback [0/1]
 CR_STREAM                     1           # Turn on streaming [0/1]
 CR_VMAX                       1e2         # Maximum velocity on the streaming direction
 CR_SIGMA                      1e8         # Diffusion coefficient
+CR_SIGMA_PERP                 1e8         # Perpendicular diffusion coefficient [1e8] ##CR_STREAMING only##
 CR_MAX_OPACITY                1e10        # Maximum opacity for cosmic-ray streaming [1e10] ##CR_STREAMING only##
 CR_TAU_ASYM_LIM               1e-3        # optical depth limit for asymptotic expansion [1e-3] ##CR_STREAMING only##
 CR_TAUFACT                    1.0         # tau factor for optical depth calculation [1.0] ##CR_STREAMING only##

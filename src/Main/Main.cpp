@@ -376,6 +376,7 @@ bool CR_SOURCE;
 bool CR_STREAM;
 double CR_VMAX;
 double CR_SIGMA;
+double CR_SIGMA_PERP;
 double CR_MAX_OPACITY;
 double CR_TAU_ASYM_LIM;
 double CR_TAUFACT;

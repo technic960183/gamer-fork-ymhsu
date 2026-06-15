@@ -449,7 +449,7 @@ void CR_UpdateOpacity( real *g_Output,
 //               vmax        : effective speed of light
 //               dh          : cell size
 //               fdir        : flux direction (0=x, 1=y, 2=z)
-//               MicroPhy    : Microphysics object containing CR_sigma, CR_max_opacity,
+//               MicroPhy    : Microphysics object containing CR_sigma, CR_sigma_perp, CR_max_opacity,
 //                             CR_taufact, CR_tau_asym_lim, and CR_vel_flx_flag
 //
 // Return      : v_diff along the specified direction (fdir)
@@ -466,6 +466,7 @@ static real CR_ComputeVdiff( const real sigma_adv,
    const real edd = (real)1.0 / (real)3.0;
    const real sigma_adv_perp = MicroPhy->CR_max_opacity;
    const real sigma_diff = MicroPhy->CR_sigma;
+   const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
 // compute B-field angles for rotation
    real sint, cost, sinp, cosp;
@@ -474,8 +475,8 @@ static real CR_ComputeVdiff( const real sigma_adv,
 // total sigma (parallel combination of sigma_diff and sigma_adv)
 // In B-aligned frame: sigma_x is parallel to B, sigma_y and sigma_z are perpendicular
    const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv );
-   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
 
 // compute tau and diffv for each B-aligned direction
 // x direction (parallel to B)
@@ -1034,10 +1035,11 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 
 // 10. Compute effective sigma (parallel combination of sigma_diff and sigma_adv)
    const real sigma_diff = MicroPhy->CR_sigma;
+   const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
    const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
 
 // 11. Build implicit matrix and solve
 //     Source terms:
@@ -1246,10 +1248,11 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 
 //    10. compute effective sigma (parallel combination of sigma_diff and sigma_adv)
       const real sigma_diff = MicroPhy->CR_sigma;
+      const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
       const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-      const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
-      const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_perp );
+      const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+      const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
 
 //    11. build implicit matrix and solve
 //        Source terms:

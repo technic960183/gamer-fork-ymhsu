@@ -297,6 +297,7 @@ void Init_Load_Parameter()
    ReadPara->Add( "CR_STREAM",                  &CR_STREAM,                       true,            Useless_bool,  Useless_bool   );
    ReadPara->Add( "CR_VMAX",                    &CR_VMAX,                         1e2,             0.0,           NoMax_double   );
    ReadPara->Add( "CR_SIGMA",                   &CR_SIGMA,                        1e8,             0.0,           NoMax_double   );
+   ReadPara->Add( "CR_SIGMA_PERP",              &CR_SIGMA_PERP,                   1e8,             0.0,           NoMax_double   );
    ReadPara->Add( "CR_MAX_OPACITY",             &CR_MAX_OPACITY,                  1e10,            0.0,           NoMax_double   );
    ReadPara->Add( "CR_TAU_ASYM_LIM",            &CR_TAU_ASYM_LIM,                 1e-3,            0.0,           NoMax_double   );
    ReadPara->Add( "CR_TAUFACT",                 &CR_TAUFACT,                      1.0,             0.0,           NoMax_double   );

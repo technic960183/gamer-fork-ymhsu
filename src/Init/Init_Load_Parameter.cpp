@@ -301,6 +301,7 @@ void Init_Load_Parameter()
    ReadPara->Add( "CR_TAU_ASYM_LIM",            &CR_TAU_ASYM_LIM,                 1e-3,            0.0,           NoMax_double   );
    ReadPara->Add( "CR_TAUFACT",                 &CR_TAUFACT,                      1.0,             0.0,           NoMax_double   );
    ReadPara->Add( "CR_VEL_FLX_FLAG",            &CR_VEL_FLX_FLAG,                 false,           Useless_bool,  Useless_bool   );
+   ReadPara->Add( "CR_CFL",                     &CR_CFL,                          0.3,             0.0,           NoMax_double   );
 # endif
 
 // fluid solvers in HYDRO

@@ -472,11 +472,16 @@ static real CR_ComputeVdiff( const real sigma_adv,
    real sint, cost, sinp, cosp;
    CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
 
-// total sigma (parallel combination of sigma_diff and sigma_adv)
+// total sigma: combine sigma_diff with the streaming opacity sigma_adv only if streaming is enabled
 // In B-aligned frame: sigma_x is parallel to B, sigma_y and sigma_z are perpendicular
-   const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv );
-   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
-   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   real sigma_x = sigma_diff;
+   real sigma_y = sigma_diff_perp;
+   real sigma_z = sigma_diff_perp;
+   if ( MicroPhy->CR_stream ) {
+      sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv );
+      sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+      sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   }
 
 // compute tau and diffv for each B-aligned direction
 // x direction (parallel to B)
@@ -1011,11 +1016,17 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    const real v_adv_y = g_ConVar_In[ADV_VY][idx_fc];
    const real v_adv_z = g_ConVar_In[ADV_VZ][idx_fc];
    const real sigma_adv_perp = MicroPhy->CR_max_opacity;
+   const bool CR_stream      = MicroPhy->CR_stream;   // flag to enable streaming
 
-// Total velocity = gas velocity + streaming velocity
-   real vtot1 = v1 + v_adv_x;
-   real vtot2 = v2 + v_adv_y;
-   real vtot3 = v3 + v_adv_z;
+// Total velocity = gas velocity + streaming velocity (streaming added only if enabled)
+   real vtot1 = v1;
+   real vtot2 = v2;
+   real vtot3 = v3;
+   if ( CR_stream ) {
+      vtot1 += v_adv_x;
+      vtot2 += v_adv_y;
+      vtot3 += v_adv_z;
+   }
 
 // 6. Save original CR energy for floor check
    const real ec_old = ec;
@@ -1033,13 +1044,18 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    vtot3 = (real)0.0;
 #  endif
 
-// 10. Compute effective sigma (parallel combination of sigma_diff and sigma_adv)
+// 10. Compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
    const real sigma_diff = MicroPhy->CR_sigma;
    const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
-   const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-   const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
-   const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   real sigma_x = sigma_diff;
+   real sigma_y = sigma_diff_perp;
+   real sigma_z = sigma_diff_perp;
+   if ( CR_stream ) {
+      sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
+      sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+      sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+   }
 
 // 11. Build implicit matrix and solve
 //     Source terms:
@@ -1172,6 +1188,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
    const real vmax   = MicroPhy->CR_vmax;
    const real invlim = (real)1.0 / vmax;
    const bool CR_source = MicroPhy->CR_source;   // flag to enable back-reaction to gas
+   const bool CR_stream = MicroPhy->CR_stream;   // flag to enable streaming
 
    CGPU_LOOP( idx_out, CUBE(PS2) )
    {
@@ -1222,10 +1239,15 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       const real v_adv_z = g_PriVar_Half[ADV_VZ][idx_pvar];
       const real sigma_adv_perp = MicroPhy->CR_max_opacity;
 
-//    total velocity = gas velocity + streaming velocity
-      real vtot1 = v1 + v_adv_x;
-      real vtot2 = v2 + v_adv_y;
-      real vtot3 = v3 + v_adv_z;
+//    total velocity = gas velocity + streaming velocity (streaming added only if enabled)
+      real vtot1 = v1;
+      real vtot2 = v2;
+      real vtot3 = v3;
+      if ( CR_stream ) {
+         vtot1 += v_adv_x;
+         vtot2 += v_adv_y;
+         vtot3 += v_adv_z;
+      }
 
 //    6. save original CR flux for back-reaction calculation
       const real fc1_old = fc1;
@@ -1246,13 +1268,18 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       vtot3 = (real)0.0;
 #     endif
 
-//    10. compute effective sigma (parallel combination of sigma_diff and sigma_adv)
+//    10. compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
       const real sigma_diff = MicroPhy->CR_sigma;
       const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
-      const real sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
-      const real sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
-      const real sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+      real sigma_x = sigma_diff;
+      real sigma_y = sigma_diff_perp;
+      real sigma_z = sigma_diff_perp;
+      if ( CR_stream ) {
+         sigma_x = (real)1.0 / ( (real)1.0/sigma_diff + (real)1.0/sigma_adv_para );
+         sigma_y = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+         sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
+      }
 
 //    11. build implicit matrix and solve
 //        Source terms:

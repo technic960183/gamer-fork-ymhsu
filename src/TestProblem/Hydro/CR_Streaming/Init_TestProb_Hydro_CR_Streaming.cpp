@@ -40,9 +40,9 @@ void Validate()
    Aux_Error( ERROR_INFO, "EOS != EOS_COSMIC_RAY when enable COSMIC_RAY !!\n" );
 #  endif
 
-/*#  ifdef CR_DIFFUSION
+#  ifdef CR_DIFFUSION
    Aux_Error( ERROR_INFO, "CR_DIFFUSION must be disabled !!\n" );
-#  endif*/
+#  endif
 
 #  ifndef CR_STREAMING
    Aux_Error( ERROR_INFO, "CR_STREAMING must be enabled !!\n" );

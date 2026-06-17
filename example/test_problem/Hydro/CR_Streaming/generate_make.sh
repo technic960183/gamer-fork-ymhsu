@@ -2,5 +2,5 @@
 
 PYTHON=python3
 
-${PYTHON} configure.py --model=HYDRO --flu_scheme=MHM_RP --flux=HLLD --mhd=true --cr_streaming=true \
-                       --cosmic_ray=true --eos=COSMIC_RAY --cr_diffusion=true --hdf5=true --openmp=false "$@"
+${PYTHON} configure.py --model=HYDRO --flu_scheme=MHM_RP --flux=HLLE --mhd=true --cr_streaming=true --slope=PLM \
+                       --cosmic_ray=true --eos=COSMIC_RAY --hdf5=true --openmp=false --double=true "$@"

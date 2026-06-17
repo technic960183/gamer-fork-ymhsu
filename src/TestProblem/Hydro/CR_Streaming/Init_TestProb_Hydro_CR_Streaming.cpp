@@ -2,11 +2,35 @@
 
 
 
+// =======================================================================================
+// CR_Streaming_Test : initial-condition geometry selector (Jiang & Oh 2018, Section 4)
+// --> the CR *physics* parameters (CR_SIGMA, CR_SIGMA_PERP, CR_STREAM, CR_SOURCE, CR_VMAX, ...)
+//     are taken from Input__Parameter, NOT set here.  Each example directory carries the
+//     Input__Parameter/Input__TestProb appropriate for one paper test.
+// =======================================================================================
+#define CR_TEST_TRIANGULAR_1D     0     // Sec 4.1.1 : 1D triangular Ec profile      (streaming)
+#define CR_TEST_GAUSSIAN_1D       1     // Sec 4.1.1 / 4.1.4 : 1D Gaussian Ec         (streaming or diffusion)
+#define CR_TEST_GAUSSIAN_2D       2     // Sec 4.1.2 / 4.1.5 : 2D Gaussian Ec, diagonal B (streaming or anisotropic diffusion)
+#define CR_TEST_CIRCLE_2D         3     // Sec 4.1.5 : 2D ring Ec, circular B         (anisotropic diffusion)
+#define CR_TEST_BOTTLENECK_1D     4     // Sec 4.1.3 : 1D density cloud, CR injected from the -x boundary
+#define CR_TEST_WAVE_1D           5     // Sec 4.2.1 : 1D CR-driven wave              (full MHD + CR coupling)
+#define CR_TEST_BLAST_2D          6     // Sec 4.2.3 : 2D CR-driven blast wave        (full MHD + CR coupling)
+
+
 // problem-specific global variables
 // =======================================================================================
-static double CR_v0;                    // velocity on the streaming direction
-static int    CR_Streaming_Dir;         // streaming direction
+static int    CR_Streaming_Test;        // test selector (one of the CR_TEST_* macros above)
+static int    CR_Streaming_Dir;          // streaming/diffusion axis for the 1D tests (0/1/2 = x/y/z)
+static double CR_Streaming_FlowV;        // uniform background flow velocity along CR_Streaming_Dir
+                                         // (e.g. the moving-fluid diffusion test, Sec 4.1.4)
 // =======================================================================================
+
+
+// function prototypes shared within this file
+#if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+void SetGridIC( real fluid[], const double x, const double y, const double z, const double Time,
+                const int lv, double AuxArray[] );
+#endif
 
 
 
@@ -46,6 +70,10 @@ void Validate()
 
 #  ifndef CR_STREAMING
    Aux_Error( ERROR_INFO, "CR_STREAMING must be enabled !!\n" );
+#  endif
+
+#  ifndef MHD
+   Aux_Error( ERROR_INFO, "MHD must be enabled (CR streaming/diffusion is field-aligned) !!\n" );
 #  endif
 
 
@@ -92,8 +120,9 @@ void SetParameter()
 // ********************************************************************************************************************************
 // ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
 // ********************************************************************************************************************************
-   ReadPara->Add( "CR_v0",             &CR_v0,                  0.0,         0.0,              NoMax_double      );
-   ReadPara->Add( "CR_Streaming_Dir",  &CR_Streaming_Dir,       0,           0,                2                 );
+   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                6                 );
+   ReadPara->Add( "CR_Streaming_Dir",   &CR_Streaming_Dir,       0,           0,                2                 );
+   ReadPara->Add( "CR_Streaming_FlowV", &CR_Streaming_FlowV,     0.0,         NoMin_double,     NoMax_double      );
 
    ReadPara->Read( FileName );
 
@@ -105,6 +134,10 @@ void SetParameter()
 
 
 // (2) set the problem-specific derived parameters
+   const bool is_1D = ( CR_Streaming_Test == CR_TEST_TRIANGULAR_1D  ||
+                        CR_Streaming_Test == CR_TEST_GAUSSIAN_1D    ||
+                        CR_Streaming_Test == CR_TEST_BOTTLENECK_1D  ||
+                        CR_Streaming_Test == CR_TEST_WAVE_1D          );
 
 
 // (3) reset other general-purpose parameters
@@ -122,12 +155,15 @@ void SetParameter()
       PRINT_RESET_PARA( END_T, FORMAT_REAL, "" );
    }
 
-   if (  ( CR_Streaming_Dir == 0 && OPT__OUTPUT_PART != OUTPUT_X )  ||
-         ( CR_Streaming_Dir == 1 && OPT__OUTPUT_PART != OUTPUT_Y )  ||
-         ( CR_Streaming_Dir == 2 && OPT__OUTPUT_PART != OUTPUT_Z )    )
+// for the 1D tests, output a line along the streaming direction
+   if ( is_1D )
    {
-      OPT__OUTPUT_PART = ( CR_Streaming_Dir == 0 ) ? OUTPUT_X : ( CR_Streaming_Dir == 1 ) ? OUTPUT_Y : OUTPUT_Z;
-      PRINT_RESET_PARA( OPT__OUTPUT_PART, FORMAT_INT, "" );
+      const int target = ( CR_Streaming_Dir == 0 ) ? OUTPUT_X : ( CR_Streaming_Dir == 1 ) ? OUTPUT_Y : OUTPUT_Z;
+      if ( OPT__OUTPUT_PART != target )
+      {
+         OPT__OUTPUT_PART = target;
+         PRINT_RESET_PARA( OPT__OUTPUT_PART, FORMAT_INT, "" );
+      }
    }
 
 
@@ -136,8 +172,9 @@ void SetParameter()
    {
       Aux_Message( stdout, "=============================================================================\n" );
       Aux_Message( stdout, "  test problem ID       = %d\n",     TESTPROB_ID );
-      Aux_Message( stdout, "  CR_v0                 = %14.7e\n", CR_v0 );
-      Aux_Message( stdout, "  CR_Streaming_Dir      = %d\n",     CR_Streaming_Dir      );
+      Aux_Message( stdout, "  CR_Streaming_Test     = %d\n",     CR_Streaming_Test  );
+      Aux_Message( stdout, "  CR_Streaming_Dir      = %d\n",     CR_Streaming_Dir   );
+      Aux_Message( stdout, "  CR_Streaming_FlowV    = %14.7e\n", CR_Streaming_FlowV );
       Aux_Message( stdout, "=============================================================================\n" );
    }
 
@@ -149,22 +186,24 @@ void SetParameter()
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    :  CR_TriangularProfile_Ec
-// Description :  Compute CR energy density for the triangular profile
+// Function    :  CR_Bottleneck_Dens
+// Description :  Density profile of the cold cloud used in the bottleneck test (Sec 4.1.3, Eq. 24)
 //
-// Note        :  1. This is the analytical formula for Ec at a given position
-//                2. Ec = 2 - |r - center| for |r - center| < 1, else Ec = 1
+// Note        :  1. Uses ABSOLUTE coordinates (the cloud is centered at x0 = 200 in the domain x in [0,1000])
+//                2. rho = rho_h + (rho_c - rho_h)*[1+tanh((x-x0)/dx0)]*[1+tanh((x0-x)/dx0)]
+//                   --> a dense cold cloud (rho_c) embedded in a diffuse hot background (rho_h)
 //
-// Parameter   :  r      : Position along streaming direction
-//                center : Center of the triangular profile
+// Parameter   :  x : Position along the streaming direction (absolute coordinate)
 //
-// Return      :  CR energy density (Ec)
+// Return      :  gas density
 //-------------------------------------------------------------------------------------------------------
-static double CR_TriangularProfile_Ec( const double r, const double center )
+static double CR_Bottleneck_Dens( const double x )
 {
-   const double d = std::abs( r - center );
-   return (d < 1.0) ? (2.0 - d) : 1.0;
-}
+   const double rho_c = 1.0, rho_h = 0.1, x0 = 200.0, dx0 = 25.0;
+   const double t1 = 1.0 + std::tanh( (x  - x0)/dx0 );
+   const double t2 = 1.0 + std::tanh( (x0 - x )/dx0 );
+   return rho_h + (rho_c - rho_h)*t1*t2;
+} // FUNCTION : CR_Bottleneck_Dens
 
 
 
@@ -181,6 +220,9 @@ static double CR_TriangularProfile_Ec( const double r, const double center )
 //                   --> It will be calculated automatically
 //                4. For MHD, do NOT add magnetic energy (i.e., 0.5*B^2) to fluid[ENGY] here
 //                   --> It will be added automatically later
+//                5. The ADV_* fields (ADV_SIGMA/ADV_VX/ADV_VY/ADV_VZ) are recomputed by CR_UpdateOpacity()
+//                   at the start of every fluid solve, so the IC values set here are overwritten before use
+//                   --> we therefore set safe no-streaming defaults
 //
 // Parameter   :  fluid    : Fluid field to be initialized
 //                x/y/z    : Physical coordinates
@@ -194,112 +236,115 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
                 const int lv, double AuxArray[] )
 {
 
-   double Dens, MomX, MomY, MomZ, Pres, Eint, Etot, P_cr, CRay, cr_E, cr_F1, cr_F2, cr_F3;
-   double r;
+   const double xc = amr->BoxCenter[0];
+   const double yc = amr->BoxCenter[1];
 
-   switch ( CR_Streaming_Dir )
+   double Dens = 1.0, vx = 0.0, vy = 0.0, vz = 0.0, Pgas = 1.0, cr_E = 0.0;
+
+   switch ( CR_Streaming_Test )
    {
-      case 0: r=x; break;
-      case 1: r=y; break;
-      case 2: r=z; break;
-   } // switch ( CR_Streaming_Dir )
+      case CR_TEST_TRIANGULAR_1D :
+      {
+//       Sec 4.1.1: Ec = 2 - |r| for |r| < 1, else 1   (r relative to the box center)
+         const double r = ( (CR_Streaming_Dir==0)?x : (CR_Streaming_Dir==1)?y : z ) - amr->BoxCenter[CR_Streaming_Dir];
+         const double d = std::fabs( r );
+         cr_E = ( d < 1.0 ) ? (2.0 - d) : 1.0;
+         vx   = ( CR_Streaming_Dir==0 ) ? CR_Streaming_FlowV : 0.0;
+         vy   = ( CR_Streaming_Dir==1 ) ? CR_Streaming_FlowV : 0.0;
+         vz   = ( CR_Streaming_Dir==2 ) ? CR_Streaming_FlowV : 0.0;
+         break;
+      }
 
-   Dens = 1.0;
-   MomX = 0.0;
-   MomY = 0.0;
-   MomZ = 0.0;
-   Pres = 1.0;
+      case CR_TEST_GAUSSIAN_1D :
+      {
+//       Sec 4.1.1 / 4.1.4: Ec = exp(-40 r^2)   (r relative to the box center)
+         const double r = ( (CR_Streaming_Dir==0)?x : (CR_Streaming_Dir==1)?y : z ) - amr->BoxCenter[CR_Streaming_Dir];
+         cr_E = std::exp( -40.0 * r*r );
+         vx   = ( CR_Streaming_Dir==0 ) ? CR_Streaming_FlowV : 0.0;
+         vy   = ( CR_Streaming_Dir==1 ) ? CR_Streaming_FlowV : 0.0;
+         vz   = ( CR_Streaming_Dir==2 ) ? CR_Streaming_FlowV : 0.0;
+         break;
+      }
 
-   const double d = std::abs( r - amr->BoxCenter[CR_Streaming_Dir]);
-   cr_E = (d < 1) ? 2 - d : 1;
+      case CR_TEST_GAUSSIAN_2D :
+      {
+//       Sec 4.1.2 / 4.1.5: Ec = exp(-40 (dx^2 + dy^2)),  B along the diagonal (set in SetBFieldIC)
+         const double dx = x - xc, dy = y - yc;
+         cr_E = std::exp( -40.0 * (dx*dx + dy*dy) );
+         break;
+      }
 
-   P_cr = 1.0; // placeholder for now
+      case CR_TEST_CIRCLE_2D :
+      {
+//       Sec 4.1.5: a ring of Ec; B is circular (set in SetBFieldIC)
+//       Ec = 12 in 0.5 < r < 0.7 and |phi| < pi/12 (consistent with the analytic solution Eq. 28), else 10
+         const double dx = x - xc, dy = y - yc;
+         const double r   = std::sqrt( dx*dx + dy*dy );
+         const double phi = std::atan2( dy, dx );
+         cr_E = ( r > 0.5  &&  r < 0.7  &&  std::fabs(phi) < M_PI/12.0 ) ? 12.0 : 10.0;
+         break;
+      }
 
-   const double cr_F = CR_v0*4.0*cr_E/(3.0*CR_VMAX) - ((r < amr->BoxCenter[CR_Streaming_Dir]) ? 1.0 : -1.0)/CR_SIGMA;
-   cr_F1 = (CR_Streaming_Dir == 0) ? cr_F : 0.0;
-   cr_F2 = (CR_Streaming_Dir == 1) ? cr_F : 0.0;
-   cr_F3 = (CR_Streaming_Dir == 2) ? cr_F : 0.0;
+      case CR_TEST_BOTTLENECK_1D :
+      {
+//       Sec 4.1.3: a cold dense cloud; CRs are injected from the -x boundary (see BottleneckBC)
+//       --> the simulation domain starts essentially empty of CRs
+         Dens = CR_Bottleneck_Dens( x );        // absolute coordinate (cloud at x0 = 200)
+         cr_E = 1.0e-6;
+         break;
+      }
 
-   const double GAMMA_CR_m1_inv = 1.0 / (GAMMA_CR - 1.0);
-   Pres = Pres + P_cr;
-   CRay = GAMMA_CR_m1_inv*P_cr;
+      case CR_TEST_WAVE_1D :
+      {
+//       Sec 4.2.1: Ec = 20 + 10 sin(pi*(x-xc)); uniform gas; full MHD + CR coupling (CR_SOURCE=1)
+         cr_E = 20.0 + 10.0*std::sin( M_PI*(x - xc) );
+         break;
+      }
 
-   fluid[CRAY] = CRay;
-   Eint = EoS_DensPres2Eint_CPUPtr( Dens, Pres, fluid+NCOMP_FLUID, EoS_AuxArray_Flt, EoS_AuxArray_Int, h_EoS_Table);
-   Etot = Hydro_ConEint2Etot( Dens, MomX, MomY, MomZ, Eint, 0.0 );      // do NOT include magnetic energy here
+      case CR_TEST_BLAST_2D :
+      {
+//       Sec 4.2.3: Ec = 100 inside r < 0.02, else 0.1; uniform background (rho=1, Eint=2.5)
+         const double dx = x - xc, dy = y - yc;
+         const double r  = std::sqrt( dx*dx + dy*dy );
+         cr_E = ( r < 0.02 ) ? 100.0 : 0.1;
+         Pgas = (GAMMA - 1.0)*2.5;               // background internal energy = 2.5
+         break;
+      }
 
-// set the output array of passive scaler
+      default :
+         Aux_Error( ERROR_INFO, "unsupported CR_Streaming_Test (%d) !!\n", CR_Streaming_Test );
+   } // switch ( CR_Streaming_Test )
 
-   fluid[CR_E] = cr_E;
-   fluid[CR_F1] = cr_F1;
-   fluid[CR_F2] = cr_F2;
-   fluid[CR_F3] = cr_F3;
 
-// set ADV_* fields for streaming
-// These are auxiliary fields needed for the CR streaming source term
-// Note: The initial values are computed from the initial B field and grad(Pc)
-//       For the triangular profile: dPc/dr = ±1/3 for d < 1, else 0
-//       B field is uniform along streaming direction with magnitude 1
-//       Alfven velocity: v_A = B / sqrt(rho) = 1 / sqrt(1) = 1
+// momentum
+   const double MomX = Dens*vx;
+   const double MomY = Dens*vy;
+   const double MomZ = Dens*vz;
 
-   const double B_field = 1.0;   // uniform B field magnitude
-   const double inv_sqrt_rho = 1.0 / std::sqrt(Dens);
-   const double va = B_field * inv_sqrt_rho;   // Alfven velocity magnitude
+// gas + (placeholder) CR pressure for the COSMIC_RAY EoS
+// --> CRAY is the EoS cosmic-ray field and is decoupled from the two-moment CR_E used by the
+//     streaming module; the gas-CR back-reaction is handled by the streaming source term via CR_E/CR_F
+   const double P_cr = 1.0;
+   const double Pres = Pgas + P_cr;
+   fluid[CRAY] = P_cr / (GAMMA_CR - 1.0);
 
-// compute grad(Pc) using NUMERICAL gradient to match Athena++
-// Athena++ uses: dprdx = (Ec[i+1] - Ec[i-1]) / 3.0 / distance
-// where distance = 0.5*(cwidth(i-1) + cwidth(i+1)) + cwidth(i) ≈ 2*dx for uniform grid
-   const double dh = amr->dh[lv];  // grid spacing at this level
-   const double center = amr->BoxCenter[CR_Streaming_Dir];
-   
-// Compute Ec at neighbor positions along streaming direction
-   double r_plus, r_minus;
-   switch ( CR_Streaming_Dir )
-   {
-      case 0: r_plus = x + dh; r_minus = x - dh; break;
-      case 1: r_plus = y + dh; r_minus = y - dh; break;
-      case 2: r_plus = z + dh; r_minus = z - dh; break;
-   }
+   const double Eint = EoS_DensPres2Eint_CPUPtr( Dens, Pres, fluid+NCOMP_FLUID, EoS_AuxArray_Flt,
+                                                 EoS_AuxArray_Int, h_EoS_Table );
+   const double Etot = Hydro_ConEint2Etot( Dens, MomX, MomY, MomZ, Eint, 0.0 );   // do NOT include magnetic energy here
 
-// Simulate outflow boundary conditions
-   r_plus -= (r_plus > amr->BoxEdgeR[CR_Streaming_Dir]) ? dh : 0.0;
-   r_minus += (r_minus < amr->BoxEdgeL[CR_Streaming_Dir]) ? dh : 0.0;
-   
-   const double Ec_plus  = CR_TriangularProfile_Ec( r_plus,  center );
-   const double Ec_minus = CR_TriangularProfile_Ec( r_minus, center );
-   
-// Numerical gradient matching Athena++: distance = 2*dx for uniform grid
-   const double distance = 2.0 * dh;
-   const double dPc_dr = (Ec_plus - Ec_minus) / 3.0 / distance;
+// two-moment CR fields (Ec and the three flux components; initial flux = 0 as in the paper)
+   fluid[CR_E ] = cr_E;
+   fluid[CR_F1] = 0.0;
+   fluid[CR_F2] = 0.0;
+   fluid[CR_F3] = 0.0;
 
-// B dot grad(Pc) for uniform B along streaming direction
-   const double b_grad_pc = B_field * dPc_dr;
+// streaming opacity/velocity: recomputed by CR_UpdateOpacity() each step --> safe no-streaming defaults
+   fluid[ADV_SIGMA] = CR_MAX_OPACITY;
+   fluid[ADV_VX   ] = 0.0;
+   fluid[ADV_VY   ] = 0.0;
+   fluid[ADV_VZ   ] = 0.0;
 
-// streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
-// In 1D along streaming direction: v_adv = -sign(b_grad_pc) * va
-   double dpc_sign = 0.0;
-   if (b_grad_pc > TINY_NUMBER)       dpc_sign = 1.0;
-   else if (-b_grad_pc > TINY_NUMBER) dpc_sign = -1.0;
-
-   const double v_adv = -va * dpc_sign;
-
-// streaming opacity: sigma_adv = |B dot grad Pc| / (|B| * va * (4/3) * (1/vmax) * Ec)
-// Note: Athena++ uses (1.0 + 1.0/3.0) = 4/3, which is the same
-   double sigma_adv;
-   const double max_opacity = 1.0e20;
-   if (va > TINY_NUMBER && cr_E > TINY_NUMBER) {
-      sigma_adv = std::abs(b_grad_pc) / (B_field * va * (1.0 + 1.0/3.0) * (1.0/CR_VMAX) * cr_E);
-   } else {
-      sigma_adv = max_opacity;
-   }
-
-// set ADV_* fields
-   fluid[ADV_SIGMA] = sigma_adv;
-   fluid[ADV_VX] = (CR_Streaming_Dir == 0) ? v_adv : 0.0;
-   fluid[ADV_VY] = (CR_Streaming_Dir == 1) ? v_adv : 0.0;
-   fluid[ADV_VZ] = (CR_Streaming_Dir == 2) ? v_adv : 0.0;
-
-// set the output array
+// gas fields
    fluid[DENS] = Dens;
    fluid[MOMX] = MomX;
    fluid[MOMY] = MomY;
@@ -318,6 +363,8 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 // Note        :  1. This function will be invoked by multiple OpenMP threads when OPENMP is enabled
 //                   (unless OPT__INIT_GRID_WITH_OMP is disabled)
 //                   --> Please ensure that everything here is thread-safe
+//                2. The Alfven speed used by the streaming module is v_A = |B|/sqrt(rho); the field
+//                   geometry also sets the direction of field-aligned streaming/diffusion
 //
 // Parameter   :  magnetic : Array to store the output magnetic field
 //                x/y/z    : Target physical coordinates
@@ -331,13 +378,97 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
                   const int lv, double AuxArray[] )
 {
 
-   const double CR_BField = 1.0;
-   magnetic[MAGX] = CR_Streaming_Dir == 0 ? CR_BField : 0.0;
-   magnetic[MAGY] = CR_Streaming_Dir == 1 ? CR_BField : 0.0;
-   magnetic[MAGZ] = CR_Streaming_Dir == 2 ? CR_BField : 0.0;
+   switch ( CR_Streaming_Test )
+   {
+      case CR_TEST_TRIANGULAR_1D :
+      case CR_TEST_GAUSSIAN_1D :
+//       uniform field along the streaming direction, |B| = 1  --> v_A = 1
+         magnetic[MAGX] = ( CR_Streaming_Dir==0 ) ? 1.0 : 0.0;
+         magnetic[MAGY] = ( CR_Streaming_Dir==1 ) ? 1.0 : 0.0;
+         magnetic[MAGZ] = ( CR_Streaming_Dir==2 ) ? 1.0 : 0.0;
+         break;
+
+      case CR_TEST_GAUSSIAN_2D :
+//       uniform field along the x-y diagonal, |B| = 1  --> v_A = 1   (Sec 4.1.2 / 4.1.5)
+         magnetic[MAGX] = 1.0/std::sqrt(2.0);
+         magnetic[MAGY] = 1.0/std::sqrt(2.0);
+         magnetic[MAGZ] = 0.0;
+         break;
+
+      case CR_TEST_CIRCLE_2D :
+      {
+//       circular field B = ( -(y-yc), (x-xc) ) / r, |B| = 1   (Sec 4.1.5)
+//       --> analytically divergence-free; corresponds to the vector potential Az = -r
+         const double dx = x - amr->BoxCenter[0];
+         const double dy = y - amr->BoxCenter[1];
+         const double r  = std::sqrt( dx*dx + dy*dy );
+         if ( r > TINY_NUMBER ) {
+            magnetic[MAGX] = -dy/r;
+            magnetic[MAGY] =  dx/r;
+         } else {
+            magnetic[MAGX] = 0.0;
+            magnetic[MAGY] = 0.0;
+         }
+         magnetic[MAGZ] = 0.0;
+         break;
+      }
+
+      case CR_TEST_BOTTLENECK_1D :
+      case CR_TEST_WAVE_1D :
+      case CR_TEST_BLAST_2D :
+      default :
+//       uniform field along x, |B| = 1
+         magnetic[MAGX] = 1.0;
+         magnetic[MAGY] = 0.0;
+         magnetic[MAGZ] = 0.0;
+         break;
+   } // switch ( CR_Streaming_Test )
 
 } // FUNCTION : SetBFieldIC
 #endif // #ifdef MHD
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  BottleneckBC
+// Description :  User boundary condition for the bottleneck test (Sec 4.1.3): inject CRs from the
+//                -x boundary by fixing Ec = 3 while keeping the background gas profile
+//
+// Note        :  1. Linked to the function pointer "BC_User_Ptr"
+//                2. Only the -x face is set to the user BC (OPT__BC_FLU_XM = 4); the +x face uses outflow
+//                3. The paper sets the boundary CR flux to the (sign-flipped) value of the last active
+//                   zone ("reflecting"); here we use Fc = 0 at the ghost, which is sufficient to inject
+//                   CRs from the boundary and drive the steady-state bottleneck profile
+//
+// Parameter   :  Array          : Array to store the prepared data including ghost zones
+//                ArraySize      : Size of Array including the ghost zones on each side
+//                fluid          : Fluid fields to be set
+//                NVar_Flu       : Number of fluid variables to be prepared
+//                GhostSize      : Number of ghost zones
+//                idx            : Array indices
+//                pos            : Physical coordinates
+//                Time           : Physical time
+//                lv             : Refinement level
+//                TFluVarIdxList : List recording the target fluid variable indices
+//                AuxArray       : Auxiliary array
+//
+// Return      :  fluid
+//-------------------------------------------------------------------------------------------------------
+void BottleneckBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+                   const int GhostSize, const int idx[], const double pos[], const double Time,
+                   const int lv, const int TFluVarIdxList[], double AuxArray[] )
+{
+
+// start from the background IC (gas density profile, Ec = 1e-6, Fc = 0, ADV defaults)
+   SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
+
+// then fix the injected CR energy density and zero the CR flux at the boundary
+   fluid[CR_E ] = 3.0;
+   fluid[CR_F1] = 0.0;
+   fluid[CR_F2] = 0.0;
+   fluid[CR_F3] = 0.0;
+
+} // FUNCTION : BottleneckBC
 #endif // #if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
 
 
@@ -378,6 +509,10 @@ void Init_TestProb_Hydro_CR_Streaming()
 #  ifdef MHD
    Init_Function_BField_User_Ptr     = SetBFieldIC;
 #  endif
+
+// the bottleneck test injects CRs through a user boundary condition on the -x face
+   if ( CR_Streaming_Test == CR_TEST_BOTTLENECK_1D )
+      BC_User_Ptr                    = BottleneckBC;
 #  endif // #if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
 
 

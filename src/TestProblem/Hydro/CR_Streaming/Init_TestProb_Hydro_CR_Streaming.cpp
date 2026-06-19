@@ -512,7 +512,14 @@ void Init_TestProb_Hydro_CR_Streaming()
 
 // the bottleneck test injects CRs through a user boundary condition on the -x face
    if ( CR_Streaming_Test == CR_TEST_BOTTLENECK_1D )
+   {
       BC_User_Ptr                    = BottleneckBC;
+//    with MHD on, a user fluid BC also requires a matching magnetic-field user BC; the field is
+//    uniform (Bx = 1) in this test, so SetBFieldIC already provides the correct ghost-zone values
+#     ifdef MHD
+      BC_BField_User_Ptr             = SetBFieldIC;
+#     endif
+   }
 #  endif // #if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
 
 

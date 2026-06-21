@@ -27,7 +27,7 @@ static double CR_Streaming_FlowV;        // uniform background flow velocity alo
 
 
 // function prototypes shared within this file
-#if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+#if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 void SetGridIC( real fluid[], const double x, const double y, const double z, const double Time,
                 const int lv, double AuxArray[] );
 #endif
@@ -56,24 +56,22 @@ void Validate()
    Aux_Error( ERROR_INFO, "MODEL != HYDRO !!\n" );
 #  endif
 
-#  ifndef COSMIC_RAY
-   Aux_Error( ERROR_INFO, "COSMIC_RAY must be enabled !!\n" );
-#  endif // #ifndef COSMIC_RAY
-
-#  if ( EOS != EOS_COSMIC_RAY )
-   Aux_Error( ERROR_INFO, "EOS != EOS_COSMIC_RAY when enable COSMIC_RAY !!\n" );
-#  endif
-
-#  ifdef CR_DIFFUSION
-   Aux_Error( ERROR_INFO, "CR_DIFFUSION must be disabled !!\n" );
-#  endif
-
 #  ifndef CR_STREAMING
    Aux_Error( ERROR_INFO, "CR_STREAMING must be enabled !!\n" );
 #  endif
 
 #  ifndef MHD
    Aux_Error( ERROR_INFO, "MHD must be enabled (CR streaming/diffusion is field-aligned) !!\n" );
+#  endif
+
+// the two-moment CR_STREAMING module is standalone: the gas may use a pure gamma-law EoS
+// (recommended, fully decoupled from CRAY) or the COSMIC_RAY EoS during the transition period
+#  if ( EOS != EOS_GAMMA  &&  EOS != EOS_COSMIC_RAY )
+   Aux_Error( ERROR_INFO, "EOS must be EOS_GAMMA (standalone) or EOS_COSMIC_RAY !!\n" );
+#  endif
+
+#  ifdef CR_DIFFUSION
+   Aux_Error( ERROR_INFO, "CR_DIFFUSION must be disabled !!\n" );
 #  endif
 
 
@@ -87,7 +85,7 @@ void Validate()
 
 
 // replace HYDRO by the target model (e.g., MHD/ELBDM) and also check other compilation flags if necessary (e.g., GRAVITY/PARTICLE)
-#if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+#if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 //-------------------------------------------------------------------------------------------------------
 // Function    :  SetParameter
 // Description :  Load and set the problem-specific runtime parameters
@@ -321,12 +319,18 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
    const double MomY = Dens*vy;
    const double MomZ = Dens*vz;
 
-// gas + (placeholder) CR pressure for the COSMIC_RAY EoS
-// --> CRAY is the EoS cosmic-ray field and is decoupled from the two-moment CR_E used by the
-//     streaming module; the gas-CR back-reaction is handled by the streaming source term via CR_E/CR_F
+// gas pressure for the EoS
+// --> standalone two-moment build (EOS_GAMMA, no COSMIC_RAY): the gas is a pure gamma-law fluid;
+//     ALL CR back-reaction is handled by the two-moment source terms (CR_E/CR_F), so no CR pressure
+//     is folded into the gas energy here
+   double Pres = Pgas;
+#  ifdef COSMIC_RAY
+// COSMIC_RAY EoS path (transition only): the EoS needs a CRAY value, so add a constant background
+// CR pressure. This couples the gas EoS to CRAY and is exactly what the standalone build removes.
    const double P_cr = 1.0;
-   const double Pres = Pgas + P_cr;
+   Pres       += P_cr;
    fluid[CRAY] = P_cr / (GAMMA_CR - 1.0);
+#  endif
 
    const double Eint = EoS_DensPres2Eint_CPUPtr( Dens, Pres, fluid+NCOMP_FLUID, EoS_AuxArray_Flt,
                                                  EoS_AuxArray_Int, h_EoS_Table );
@@ -469,7 +473,7 @@ void BottleneckBC( real Array[], const int ArraySize[], real fluid[], const int 
    fluid[CR_F3] = 0.0;
 
 } // FUNCTION : BottleneckBC
-#endif // #if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+#endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 
 
 
@@ -494,7 +498,7 @@ void Init_TestProb_Hydro_CR_Streaming()
 
 
 // replace HYDRO by the target model (e.g., MHD/ELBDM) and also check other compilation flags if necessary (e.g., GRAVITY/PARTICLE)
-#  if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+#  if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 // set the problem-specific runtime parameters
    SetParameter();
 
@@ -520,7 +524,7 @@ void Init_TestProb_Hydro_CR_Streaming()
       BC_BField_User_Ptr             = SetBFieldIC;
 #     endif
    }
-#  endif // #if ( MODEL == HYDRO  &&  defined COSMIC_RAY  &&  defined CR_STREAMING )
+#  endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 
 
    if ( MPI_Rank == 0 )    Aux_Message( stdout, "%s ... done\n", __FUNCTION__ );

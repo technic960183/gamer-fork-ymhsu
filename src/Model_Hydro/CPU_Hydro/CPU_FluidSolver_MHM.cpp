@@ -38,10 +38,11 @@
 #ifdef CR_DIFFUSION
 # include "../../Microphysics/CosmicRayDiffusion/CUFLU_CR_AddDiffuseFlux.cu"
 #endif
+#endif // #ifdef COSMIC_RAY
+// CR_STREAMING (two-moment) is a standalone module and does NOT require COSMIC_RAY
 #ifdef CR_STREAMING
 # include "CUFLU_CR_TwoMoment.cu"
 #endif
-#endif // #ifdef COSMIC_RAY
 
 #else // #ifdef __CUDACC__
 
@@ -154,6 +155,8 @@ void CR_AddDiffuseFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                  const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
                                  const int NFlux, const real dh, const MicroPhy_t *MicroPhy );
 #endif // #ifdef CR_DIFFUSION
+#endif // #ifdef COSMIC_RAY
+// CR_STREAMING (two-moment) is a standalone module and does NOT require COSMIC_RAY
 #ifdef CR_STREAMING
 void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                                   real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
@@ -191,7 +194,6 @@ void CR_UpdateOpacity( real *g_Output,
                        const int out_offset, const int in_offset, const int NSize,
                        const real dh, const MicroPhy_t *MicroPhy );
 #endif // #ifdef CR_STREAMING
-#endif // #ifdef COSMIC_RAY
 
 #endif // #ifdef __CUDACC__ ... else ...
 
@@ -935,7 +937,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 {
 
    const int  didx_flux[3] = { 1, N_HF_FLUX, SQR(N_HF_FLUX) };
-#  ifdef COSMIC_RAY
+#  if ( defined COSMIC_RAY  ||  defined CR_STREAMING )
    const int  didx_in[3]   = { 1, FLU_NXT, SQR(FLU_NXT) };
 #  endif
    const real dt_dh2       = (real)0.5*dt/dh;

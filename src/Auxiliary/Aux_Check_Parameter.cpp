@@ -1925,6 +1925,40 @@ void Aux_Check_Parameter()
 #endif // ifdef CR_DIFFUSION
 
 
+// =======================================================================================
+// check : CR_STREAMING (two-moment cosmic-ray transport; Jiang & Oh 2018)
+// --> standalone module: does NOT require COSMIC_RAY (gas may use a pure gamma-law EoS)
+// =======================================================================================
+#ifdef CR_STREAMING
+
+// errors
+// ------------------------------
+#  ifndef MHD
+#     error : ERROR : must enable MHD for CR_STREAMING (CR transport is field-aligned) !!
+#  endif
+
+#  if ( FLU_SCHEME != MHM_RP )
+#     error : ERROR : CR_STREAMING currently only supports the MHM_RP fluid scheme !!
+#  endif
+
+#  if ( EOS != EOS_GAMMA  &&  EOS != EOS_COSMIC_RAY )
+#     error : ERROR : CR_STREAMING must use EOS_GAMMA (standalone) or EOS_COSMIC_RAY !!
+#  endif
+
+#  ifdef DUAL_ENERGY
+#     error : ERROR : DUAL_ENERGY is not supported for CR_STREAMING !!
+#  endif
+
+// warning
+// ------------------------------
+   if ( MPI_Rank == 0 ) {
+      if ( CR_CFL < 0.0  ||  CR_CFL > 1.0 )
+         Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) is not within the normal range [0...1] !!\n", CR_CFL );
+   } // if ( MPI_Rank == 0 )
+
+#endif // ifdef CR_STREAMING
+
+
    if ( MPI_Rank == 0 )    Aux_Message( stdout, "Aux_Check_Parameter ... done\n" );
 
 } // FUNCTION : Aux_Check_Parameter

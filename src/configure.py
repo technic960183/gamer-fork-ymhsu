@@ -703,9 +703,11 @@ def load_arguments( sys_setting : SystemSetting ):
 
     parser.add_argument( "--cr_streaming", type=str2bool, metavar="BOOLEAN", gamer_name="CR_STREAMING",
                          default=False,
-                         depend={"cosmic_ray":True},
-                         constraint={ True:{"cosmic_ray":True, "mhd":True} },
-                         help="Enable cosmic-ray streaming. Must enable <--mhd> and <--cosmic_ray>.\n"
+                         constraint={ True:{"mhd":True, "eos":["GAMMA", "COSMIC_RAY"]} },
+                         help="Enable cosmic-ray streaming (two-moment method; Jiang & Oh 2018).\n"
+                              "Must enable <--mhd>. Can be built standalone with <--eos=GAMMA> (gas is a\n"
+                              "pure gamma-law fluid and all CR back-reaction is handled by the two-moment\n"
+                              "source terms), or together with <--cosmic_ray>/<--eos=COSMIC_RAY>.\n"
                        )
 
     # B. miscellaneous options

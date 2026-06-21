@@ -352,8 +352,11 @@ InterpolationHandler Int_InterpolationHandler;
 #endif // #ifdef SUPPORT_SPECTRAL_INT
 
 // (2-14) cosmic ray
-#ifdef COSMIC_RAY
+// GAMMA_CR (CR adiabatic index) is shared by the classic (COSMIC_RAY) and two-moment (CR_STREAMING) modules
+#if ( defined COSMIC_RAY  ||  defined CR_STREAMING )
 double GAMMA_CR;
+#endif
+#ifdef COSMIC_RAY
 bool   OPT__FLAG_CRAY, OPT__FLAG_LOHNER_CRAY;
 double FlagTable_CRay[NLEVEL-1];
 #endif

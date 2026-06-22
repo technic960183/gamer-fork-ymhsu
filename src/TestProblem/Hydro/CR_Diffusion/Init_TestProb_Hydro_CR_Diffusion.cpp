@@ -234,7 +234,10 @@ void SetParameter()
    if ( CR_Diffusion_CenterZ < 0.0 )  CR_Diffusion_CenterZ = 0.5*amr->BoxSize[2];
 
 // (1-3) check the runtime parameters
-   if ( CR_Diffusion_Type == 0  ||  CR_Diffusion_Type == 1  ||  CR_Diffusion_Type == 2  ||  CR_Diffusion_Type == 3 )
+// --> Type 0/3 (Gaussian ball/plane, uniform B) are allowed to run for the two-moment-vs-classic
+//     comparison (example/test_problem/Hydro/CR_Classic_Diffusion): the gas is kept static via a
+//     large background pressure instead of being explicitly fixed, so CRay diffuses cleanly.
+   if ( CR_Diffusion_Type == 1  ||  CR_Diffusion_Type == 2 )
       Aux_Error( ERROR_INFO, "CR_Diffusion_Type (%d) is not supported yet !! (Unless you have fixed the all the fluid except cosmic ray.)\n", CR_Diffusion_Type );
 
    if ( (CR_Diffusion_Type == 0  ||  CR_Diffusion_Type == 3)  &&  CR_Diffusion_Mag_Type != 0 )

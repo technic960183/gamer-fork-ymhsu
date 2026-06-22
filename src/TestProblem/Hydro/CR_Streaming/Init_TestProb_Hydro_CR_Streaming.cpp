@@ -15,6 +15,11 @@
 #define CR_TEST_BOTTLENECK_1D     4     // Sec 4.1.3 : 1D density cloud, CR injected from the -x boundary
 #define CR_TEST_WAVE_1D           5     // Sec 4.2.1 : 1D CR-driven wave              (full MHD + CR coupling)
 #define CR_TEST_BLAST_2D          6     // Sec 4.2.3 : 2D CR-driven blast wave        (full MHD + CR coupling)
+// -- classic single-moment CR module comparison tests (port of example/test_problem/Hydro/CR_{Diffusion,ShockTube,SoundWave}) --
+// -- compare the two-moment CR_E against the classic-module CRay for the same setup --
+#define CR_TEST_CLASSIC_DIFFUSION 7     // classic CR_Diffusion : Gaussian Ec, uniform B||x, frozen gas (pure diffusion)
+#define CR_TEST_CLASSIC_SHOCKTUBE 8     // classic CR_ShockTube : CR-hydro shock, CR locked to gas (high opacity + CR_SOURCE)
+#define CR_TEST_CLASSIC_SOUNDWAVE 9     // classic CR_SoundWave : CR-modified acoustic wave, CR locked to gas
 
 
 // problem-specific global variables
@@ -118,8 +123,8 @@ void SetParameter()
 // ********************************************************************************************************************************
 // ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
 // ********************************************************************************************************************************
-   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                6                 );
-   ReadPara->Add( "CR_Streaming_Dir",   &CR_Streaming_Dir,       0,           0,                2                 );
+   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                9                 );
+   ReadPara->Add( "CR_Streaming_Dir",   &CR_Streaming_Dir,       0,           0,                3                 );
    ReadPara->Add( "CR_Streaming_FlowV", &CR_Streaming_FlowV,     0.0,         NoMin_double,     NoMax_double      );
 
    ReadPara->Read( FileName );
@@ -132,10 +137,12 @@ void SetParameter()
 
 
 // (2) set the problem-specific derived parameters
-   const bool is_1D = ( CR_Streaming_Test == CR_TEST_TRIANGULAR_1D  ||
-                        CR_Streaming_Test == CR_TEST_GAUSSIAN_1D    ||
-                        CR_Streaming_Test == CR_TEST_BOTTLENECK_1D  ||
-                        CR_Streaming_Test == CR_TEST_WAVE_1D          );
+   const bool is_1D = ( CR_Streaming_Test == CR_TEST_TRIANGULAR_1D     ||
+                        CR_Streaming_Test == CR_TEST_GAUSSIAN_1D       ||
+                        CR_Streaming_Test == CR_TEST_BOTTLENECK_1D     ||
+                        CR_Streaming_Test == CR_TEST_WAVE_1D           ||
+                        CR_Streaming_Test == CR_TEST_CLASSIC_DIFFUSION ||
+                        CR_Streaming_Test == CR_TEST_CLASSIC_SHOCKTUBE   );
 
 
 // (3) reset other general-purpose parameters
@@ -309,6 +316,64 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
          break;
       }
 
+      case CR_TEST_CLASSIC_DIFFUSION :
+      {
+//       Port of the classic CR_Diffusion test (Gaussian ball, Type 0) for a clean CR_E-vs-CRay comparison.
+//       Ec(t=0) = E0*exp(-R02*(x-xc)^2) + BG  with uniform B||x  --> diffuses along x only.
+//       The classic parallel coefficient kappa_para is matched in Input__Parameter via the two-moment
+//       inverse-diffusion convention kappa = 1/(3*CR_SIGMA)  -->  CR_SIGMA = 1/(3*kappa_classic).
+//       Gas is kept stiff (large Pgas) and CR_SOURCE is disabled so the gas stays static (pure diffusion).
+         const double E0 = 1.0, R02 = 40.0, BG = 0.1;
+         const double dxc = x - xc;
+         cr_E = E0*std::exp( -R02*dxc*dxc ) + BG;
+         Pgas = 100.0;                           // stiff gas -> stays static under the small CR pressure
+         break;
+      }
+
+      case CR_TEST_CLASSIC_SHOCKTUBE :
+      {
+//       Port of the classic CR_ShockTube test (CR coupled to gas, gamma_cr=4/3, no diffusion).
+//       Emulated as single-fluid CR-hydro: CR locked to the gas (CR_SIGMA large, CR_STREAM=0) with
+//       CR_SOURCE=1 providing the CR-pressure back-reaction.  Ec = Pcr/(gamma_cr-1) = 3*Pcr.
+//       L (x<xc): rho=1.0, Pgas=6.7e4, Pcr=1.3e5 ;  R (x>xc): rho=0.2, Pgas=2.4e2, Pcr=2.4e2.
+         const double Pcr_L = 1.3e5, Pcr_R = 2.4e2;
+         const double _gcrm1 = 1.0/(GAMMA_CR - 1.0);
+         if      ( x < xc ) { Dens = 1.0;            Pgas = 6.7e4;             cr_E = Pcr_L*_gcrm1;             }
+         else if ( x > xc ) { Dens = 0.2;            Pgas = 2.4e2;             cr_E = Pcr_R*_gcrm1;             }
+         else               { Dens = 0.5*(1.0+0.2); Pgas = 0.5*(6.7e4+2.4e2); cr_E = 0.5*(Pcr_L+Pcr_R)*_gcrm1; }
+         break;
+      }
+
+      case CR_TEST_CLASSIC_SOUNDWAVE :
+      {
+//       Port of the classic CR_SoundWave test (CR-modified acoustic wave, gamma_cr=4/3).
+//       Emulated as single-fluid CR-hydro: CR locked to the gas (CR_SIGMA large, CR_STREAM=0) with
+//       CR_SOURCE=1.  The wave speed includes the CR pressure: cs^2 = (gamma*Pg0 + gamma_cr*Pcr0)/rho0.
+//       CR_Streaming_Dir = 0/1/2 -> grid-aligned 1D wave along x/y/z (B along same axis);
+//       CR_Streaming_Dir = 3     -> diagonal wave along (1,1,1) with B = (1,1,1)/sqrt(3).
+         const double Rho0 = 1.0, Pg0 = 1.0, Pcr0 = 1.0, Delta = 1.0e-6, Sign = 1.0;
+         const double cs       = std::sqrt( GAMMA*Pg0 + GAMMA_CR*Pcr0 );   // rho0 = 1
+         const double delta_cs = Delta/cs;
+         const bool    diag    = ( CR_Streaming_Dir == 3 );
+         const double WaveL    = diag ? amr->BoxSize[0]/std::sqrt(3.0) : amr->BoxSize[CR_Streaming_Dir];
+         const double WaveK    = 2.0*M_PI/WaveL;
+         const double r        = diag ? ( x + y + z )/std::sqrt(3.0)
+                                      : ( (CR_Streaming_Dir==0)?x : (CR_Streaming_Dir==1)?y : z );
+         const double wave     = std::sin( WaveK*r );                      // t = 0
+         const double vel      = Sign*Delta*wave;                          // velocity perturbation
+         Dens = ( 1.0 + delta_cs*wave )*Rho0;
+         if ( diag ) {
+            vx = vy = vz = vel/std::sqrt(3.0);
+         } else {
+            vx = ( CR_Streaming_Dir==0 ) ? vel : 0.0;
+            vy = ( CR_Streaming_Dir==1 ) ? vel : 0.0;
+            vz = ( CR_Streaming_Dir==2 ) ? vel : 0.0;
+         }
+         Pgas = ( 1.0 + delta_cs*wave*GAMMA    )*Pg0;
+         cr_E = ( 1.0 + delta_cs*wave*GAMMA_CR )*Pcr0/(GAMMA_CR - 1.0);    // Ec = 3*Pcr
+         break;
+      }
+
       default :
          Aux_Error( ERROR_INFO, "unsupported CR_Streaming_Test (%d) !!\n", CR_Streaming_Test );
    } // switch ( CR_Streaming_Test )
@@ -425,9 +490,25 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
          break;
       }
 
+      case CR_TEST_CLASSIC_SOUNDWAVE :
+//       B aligned with the wave so the field-aligned CR source has no perpendicular cross-terms:
+//       CR_Streaming_Dir = 0/1/2 -> B along x/y/z (grid-aligned); = 3 -> B = (1,1,1)/sqrt(3)
+         if ( CR_Streaming_Dir == 3 ) {
+            magnetic[MAGX] = 1.0/std::sqrt(3.0);
+            magnetic[MAGY] = 1.0/std::sqrt(3.0);
+            magnetic[MAGZ] = 1.0/std::sqrt(3.0);
+         } else {
+            magnetic[MAGX] = ( CR_Streaming_Dir==0 ) ? 1.0 : 0.0;
+            magnetic[MAGY] = ( CR_Streaming_Dir==1 ) ? 1.0 : 0.0;
+            magnetic[MAGZ] = ( CR_Streaming_Dir==2 ) ? 1.0 : 0.0;
+         }
+         break;
+
       case CR_TEST_BOTTLENECK_1D :
       case CR_TEST_WAVE_1D :
       case CR_TEST_BLAST_2D :
+      case CR_TEST_CLASSIC_DIFFUSION :   // B||x: classic diffusion is along x (kappa_para)
+      case CR_TEST_CLASSIC_SHOCKTUBE :   // B||x (parallel to the 1D shock normal -> no magnetic force)
       default :
 //       uniform field along x, |B| = 1
          magnetic[MAGX] = 1.0;

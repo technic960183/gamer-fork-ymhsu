@@ -402,18 +402,26 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
       case CR_TEST_CIRCLE_2D :
       {
 //       circular field B = ( -(y-yc), (x-xc) ) / r, |B| = 1   (Sec 4.1.5)
-//       --> analytically divergence-free; corresponds to the vector potential Az = -r
-         const double dx = x - amr->BoxCenter[0];
-         const double dy = y - amr->BoxCenter[1];
-         const double r  = std::sqrt( dx*dx + dy*dy );
-         if ( r > TINY_NUMBER ) {
-            magnetic[MAGX] = -dy/r;
-            magnetic[MAGY] =  dx/r;
-         } else {
-            magnetic[MAGX] = 0.0;
-            magnetic[MAGY] = 0.0;
-         }
+//       --> set B as the DISCRETE CURL of the vector potential Az(X,Y) = -sqrt((X-xc)^2+(Y-yc)^2):
+//              Bx = dAz/dy ,  By = -dAz/dx
+//           evaluated by one-cell finite differences over the cell faces.
+//       --> this makes B divergence-free to MACHINE PRECISION on the GAMER grid and reproduces
+//           Athena++'s setup (src/pgen/cr_diffusion.cpp) cell-for-cell.
+//       --> the previous pointwise field B=(-dy/r,dx/r) is only *analytically* div-free; on the
+//           grid it leaves a large discrete div(B) (~1e-2 max, every cell failing the 1e-11
+//           tolerance), so the field-aligned diffusion direction b(x)b(x) differs from Athena's
+//           and the GAMER<->Athena error grows with the diffusion time (the uniform-field
+//           anisotropic-diffusion test, which IS discretely div-free, stays at ~3e-8 instead).
+         const double xc = amr->BoxCenter[0];
+         const double yc = amr->BoxCenter[1];
+         const double dh = amr->dh[lv];                 // SetBFieldIC is called per component at the
+                                                        // correct face center, so a single-cell curl
+                                                        // here matches GAMER's face-centered B storage
+#        define CR_CIRCLE_AZ( X, Y )  ( -std::sqrt( SQR((X)-xc) + SQR((Y)-yc) ) )
+         magnetic[MAGX] =  ( CR_CIRCLE_AZ( x, y+0.5*dh ) - CR_CIRCLE_AZ( x, y-0.5*dh ) ) / dh;
+         magnetic[MAGY] = -( CR_CIRCLE_AZ( x+0.5*dh, y ) - CR_CIRCLE_AZ( x-0.5*dh, y ) ) / dh;
          magnetic[MAGZ] = 0.0;
+#        undef CR_CIRCLE_AZ
          break;
       }
 
@@ -440,9 +448,16 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
 //
 // Note        :  1. Linked to the function pointer "BC_User_Ptr"
 //                2. Only the -x face is set to the user BC (OPT__BC_FLU_XM = 4); the +x face uses outflow
-//                3. The paper sets the boundary CR flux to the (sign-flipped) value of the last active
-//                   zone ("reflecting"); here we use Fc = 0 at the ghost, which is sufficient to inject
-//                   CRs from the boundary and drive the steady-state bottleneck profile
+//                3. Following Jiang & Oh (2018, Sec 4.1.3), the boundary CR flux is "reflecting": the
+//                   ghost-zone Fc is set to the sign-flipped value of the first active zone
+//                   (Fc_ghost = -Fc_active), while Ec is fixed to 3.  This matches the Athena++ setup
+//                   (src/pgen/cr_diffusion.cpp : BottleneckCRInnerX1) so the boundary injects exactly
+//                   the same CR energy flux.
+//                   --> a simpler Fc_ghost = 0 also drives the bottleneck, but the HLLE boundary flux
+//                       then leaves the upstream Ec plateau only ~half as far below the Ec=3 reservoir,
+//                       i.e. ~2% high relative to Athena++ (the only place the two codes disagreed)
+//                4. The first active zone's Fc is read from the prepared "Array" (its interior is
+//                   already filled before the ghost zones; same layout/pattern as the JetICMWall user BC)
 //
 // Parameter   :  Array          : Array to store the prepared data including ghost zones
 //                ArraySize      : Size of Array including the ghost zones on each side
@@ -466,11 +481,26 @@ void BottleneckBC( real Array[], const int ArraySize[], real fluid[], const int 
 // start from the background IC (gas density profile, Ec = 1e-6, Fc = 0, ADV defaults)
    SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
 
-// then fix the injected CR energy density and zero the CR flux at the boundary
+// fix the injected CR energy density; keep the transverse CR fluxes at zero (B is along x here)
    fluid[CR_E ] = 3.0;
-   fluid[CR_F1] = 0.0;
    fluid[CR_F2] = 0.0;
    fluid[CR_F3] = 0.0;
+
+// reflecting CR flux along the streaming (x) direction: Fc_ghost = -Fc(first active zone)
+// --> the prepared "Array" already holds the interior data when the ghost zones are filled, so we
+//     read CR_F1 of the first active cell; slot v in Array corresponds to field TFluVarIdxList[v]
+   typedef real (*vla)[ ArraySize[2] ][ ArraySize[1] ][ ArraySize[0] ];
+   vla Array3D = ( vla )Array;
+
+   const int i_ref = GhostSize;   // first active cell along +x (the -x ghost zones are idx[0] < GhostSize)
+   const int jg    = idx[1];
+   const int kg    = idx[2];
+
+   real CRF1_active = 0.0;
+   for (int v=0; v<NVar_Flu; v++)
+      if ( TFluVarIdxList[v] == CR_F1 )   CRF1_active = Array3D[v][kg][jg][i_ref];
+
+   fluid[CR_F1] = -CRF1_active;
 
 } // FUNCTION : BottleneckBC
 #endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )

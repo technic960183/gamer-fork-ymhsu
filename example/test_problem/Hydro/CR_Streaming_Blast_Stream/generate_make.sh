@@ -2,5 +2,5 @@
 
 PYTHON=python3
 
-${PYTHON} configure.py --model=HYDRO --flu_scheme=MHM_RP --flux=HLLE --mhd=true --slope=PLM \
+${PYTHON} configure.py --model=HYDRO --flu_scheme=MHM_RP --flux=HLLD --mhd=true --slope=PLM \
                        --cr_streaming=true --eos=GAMMA --hdf5=true --openmp=true --double=true "$@"

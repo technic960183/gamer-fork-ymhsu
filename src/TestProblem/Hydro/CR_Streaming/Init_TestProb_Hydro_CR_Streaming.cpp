@@ -283,10 +283,17 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
       {
 //       Sec 4.1.5: a ring of Ec; B is circular (set in SetBFieldIC)
 //       Ec = 12 in 0.5 < r < 0.7 and |phi| < pi/12 (consistent with the analytic solution Eq. 28), else 10
+//       The paper keeps "all the MHD variables fixed": the circular field B = (-y/r, x/r) has |B| = 1 but an
+//       unbalanced hoop stress (tension force -B^2/r r^) that cannot be pressure-balanced (Pgas ~ -ln r diverges).
+//       With rho = 1 the gas implodes at the field vortex (rho_center 1 -> 2.7 by t = 0.26) and adiabatically
+//       compresses the CRs into a spurious central peak (Ec ~ 35 vs background 10).  Emulate the frozen fluid
+//       with a very inert gas instead: a = B^2/(r*rho) --> rho = 1e8 keeps the center displacement < 1e-5 cells
+//       by t = 0.26.  With streaming off the CR module never uses rho, so the CR test itself is unaffected.
          const double dx = x - xc, dy = y - yc;
          const double r   = std::sqrt( dx*dx + dy*dy );
          const double phi = std::atan2( dy, dx );
          cr_E = ( r > 0.5  &&  r < 0.7  &&  std::fabs(phi) < M_PI/12.0 ) ? 12.0 : 10.0;
+         Dens = 1.0e8;                           // quasi-static gas (see the note above)
          break;
       }
 

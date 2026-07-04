@@ -1,0 +1,15 @@
+# problem-specific runtime parameters
+# Port of the classic CR_SoundWave test into the two-moment module to compare CR_E against CRay.
+# CR-modified acoustic wave (gamma_cr=4/3, amplitude 1e-6), NO diffusion: emulated by locking the
+# CR to the gas (large CR_SIGMA, CR_STREAM=0) with CR_SOURCE=1 providing the pressure back-reaction.
+# The wave speed includes the CR pressure: cs^2 = (gamma*Pg0 + gamma_cr*Pcr0)/rho0 = 3 (cs=sqrt3).
+# All wave parameters (Rho0=Pg0=Pcr0=1, Delta=1e-6) are hardcoded in SetGridIC.
+#
+# CR_Streaming_Dir = 0/1/2 -> grid-aligned wave along x/y/z with B along the same axis (default; stable)
+# CR_Streaming_Dir = 3     -> wave and B along the (1,1,1) diagonal like the classic 3D test
+#                             (use a cubic grid, e.g. 64^3, and set END_T = (1/sqrt3)/sqrt3 = 1/3)
+#                             WARNING: the diagonal setup excites the oblique-B two-moment instability
+#                             (present in Athena++ as well) -> requires CR_VEL_FLX_FLAG=1 in Input__Parameter
+CR_Streaming_Test        9              # 9 = classic CR_SoundWave
+CR_Streaming_Dir         0              # wave direction: 0/1/2 = x/y/z, 3 = diagonal (see WARNING above)
+CR_Streaming_FlowV       0.0            # no background flow

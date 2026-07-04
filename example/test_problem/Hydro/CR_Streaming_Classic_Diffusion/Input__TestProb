@@ -1,0 +1,7 @@
+# problem-specific runtime parameters
+# Port of the classic CR_Diffusion test (Gaussian Ec ball, uniform B||x) into the two-moment module
+# to compare CR_E against the classic-module CRay.  The parallel diffusion coefficient is matched via
+# CR_SIGMA = 1/(3*kappa_classic) in Input__Parameter (inverse-diffusion convention; kappa_classic = 0.05).
+CR_Streaming_Test        7              # 7 = classic CR_Diffusion (Gaussian, frozen gas, pure diffusion)
+CR_Streaming_Dir         0              # diffusion axis (0/1/2 = x/y/z); B is along x
+CR_Streaming_FlowV       0.0            # no background flow

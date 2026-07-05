@@ -341,15 +341,20 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 
       case CR_TEST_CLASSIC_DIFFUSION :
       {
-//       Port of the classic CR_Diffusion test (Gaussian ball, Type 0) for a clean CR_E-vs-CRay comparison.
-//       Ec(t=0) = E0*exp(-R02*(x-xc)^2) + BG  with uniform B||x  --> diffuses along x only.
+//       Port of the classic CR_Diffusion test (Gaussian ball, Type 0, Mag_Type 0) with the EXACT
+//       classic main-branch setup for a direct CR_E-vs-CRay comparison:
+//         Ec(t=0) = E0*exp(-R02*r^2) + BG  (3D ball at the box center),  uniform B||x,
+//         rho = 1, Pgas = 5/3 (classic CR_Diffusion_PGas0 default).
 //       The classic parallel coefficient kappa_para is matched in Input__Parameter via the two-moment
-//       inverse-diffusion convention kappa = 1/(3*CR_SIGMA)  -->  CR_SIGMA = 1/(3*kappa_classic).
-//       Gas is kept stiff (large Pgas) and CR_SOURCE is disabled so the gas stays static (pure diffusion).
+//       inverse-diffusion convention kappa = 1/(3*CR_SIGMA)  -->  CR_SIGMA = 1/(3*kappa_classic);
+//       kappa_perp = 0 is emulated with a large-but-stable CR_SIGMA_PERP (see the example input).
+//       CR_SOURCE selects the physics: 1 = CR back-reacts on the gas exactly like the classic
+//       module's EoS coupling (matched live-gas comparison); 0 = no coupling --> the gas stays
+//       static (uniform Pgas) and the center line follows the pure-diffusion analytic (Eq. 25).
          const double E0 = 1.0, R02 = 40.0, BG = 0.1;
-         const double dxc = x - xc;
-         cr_E = E0*std::exp( -R02*dxc*dxc ) + BG;
-         Pgas = 100.0;                           // stiff gas -> stays static under the small CR pressure
+         const double dxc = x - xc, dyc = y - yc, dzc = z - amr->BoxCenter[2];
+         cr_E = E0*std::exp( -R02*( dxc*dxc + dyc*dyc + dzc*dzc ) ) + BG;
+         Pgas = 1.666666666667;                  // classic CR_Diffusion_PGas0
          break;
       }
 
@@ -407,12 +412,15 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 //         initial CR flux is the advective flux Fc = (4/3) v Ec (CRs co-moving with the gas)
 //       Streaming uses a constant v_A = 1 (uniform B||x with rho=1 upstream); diffusion sigma'=10
 //       and Vm=100 come from Input__Parameter.  The x ghost zones are fixed to this IC (ShockBC).
+//       NOTE: the stored CR_F field is the REDUCED flux Fc/Vm (same convention as Athena++'s
+//       u_cr(CRF*); see the transport flux vmax*Fc and the source equilibrium Fc -> (4/3)v*Ec/Vm
+//       in CPU_CR_TwoMoment.cpp), so the advective IC must be divided by CR_VMAX here.
          const double v = ( x < xc ) ? CR_Streaming_FlowV : -CR_Streaming_FlowV;
          Dens  = 1.0;
          Pgas  = 1.0;
          vx    = v;
          cr_E  = CR_Streaming_Ec0;
-         cr_F1 = ( CR_Streaming_FcInit == 0 ) ? 0.0 : (4.0/3.0)*v*cr_E;
+         cr_F1 = ( CR_Streaming_FcInit == 0 ) ? 0.0 : (4.0/3.0)*v*cr_E/CR_VMAX;
          break;
       }
 

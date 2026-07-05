@@ -20,6 +20,8 @@
 #define CR_TEST_CLASSIC_DIFFUSION 7     // classic CR_Diffusion : Gaussian Ec, uniform B||x, frozen gas (pure diffusion)
 #define CR_TEST_CLASSIC_SHOCKTUBE 8     // classic CR_ShockTube : CR-hydro shock, CR locked to gas (high opacity + CR_SOURCE)
 #define CR_TEST_CLASSIC_SOUNDWAVE 9     // classic CR_SoundWave : CR-modified acoustic wave, CR locked to gas
+// -- the paper's own CR-modified shock test (Jiang & Oh 2018, Sec 4.2.2, Fig 11) --
+#define CR_TEST_PAPER_SHOCK      10     // Sec 4.2.2 : colliding-flow CR-modified shock (streaming + diffusion + advection)
 
 
 // problem-specific global variables
@@ -27,7 +29,12 @@
 static int    CR_Streaming_Test;        // test selector (one of the CR_TEST_* macros above)
 static int    CR_Streaming_Dir;          // streaming/diffusion axis for the 1D tests (0/1/2 = x/y/z)
 static double CR_Streaming_FlowV;        // uniform background flow velocity along CR_Streaming_Dir
-                                         // (e.g. the moving-fluid diffusion test, Sec 4.1.4)
+                                         // (e.g. the moving-fluid diffusion test, Sec 4.1.4);
+                                         // also the collision half-speed for the shock test (Sec 4.2.2, |v|=10)
+static double CR_Streaming_Ec0;          // uniform CR energy density for the shock test (Sec 4.2.2: 1, 50, or 200)
+static int    CR_Streaming_FcInit;       // shock-test initial CR flux: 1 = advective Fc=(4/3)v*Ec (paper),
+                                         // 0 = zero (avoids the sharp t=0 flux discontinuity at the collision;
+                                         //     the flux relaxes to the advective value on ~1/(Vm*sigma))
 // =======================================================================================
 
 
@@ -35,6 +42,9 @@ static double CR_Streaming_FlowV;        // uniform background flow velocity alo
 #if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 void SetGridIC( real fluid[], const double x, const double y, const double z, const double Time,
                 const int lv, double AuxArray[] );
+void ShockBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+              const int GhostSize, const int idx[], const double pos[], const double Time,
+              const int lv, const int TFluVarIdxList[], double AuxArray[] );
 #endif
 
 
@@ -123,9 +133,11 @@ void SetParameter()
 // ********************************************************************************************************************************
 // ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
 // ********************************************************************************************************************************
-   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                9                 );
+   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                10                );
    ReadPara->Add( "CR_Streaming_Dir",   &CR_Streaming_Dir,       0,           0,                3                 );
    ReadPara->Add( "CR_Streaming_FlowV", &CR_Streaming_FlowV,     0.0,         NoMin_double,     NoMax_double      );
+   ReadPara->Add( "CR_Streaming_Ec0",   &CR_Streaming_Ec0,       1.0,         Eps_double,       NoMax_double      );
+   ReadPara->Add( "CR_Streaming_FcInit", &CR_Streaming_FcInit,    1,           0,                1                 );
 
    ReadPara->Read( FileName );
 
@@ -142,7 +154,8 @@ void SetParameter()
                         CR_Streaming_Test == CR_TEST_BOTTLENECK_1D     ||
                         CR_Streaming_Test == CR_TEST_WAVE_1D           ||
                         CR_Streaming_Test == CR_TEST_CLASSIC_DIFFUSION ||
-                        CR_Streaming_Test == CR_TEST_CLASSIC_SHOCKTUBE   );
+                        CR_Streaming_Test == CR_TEST_CLASSIC_SHOCKTUBE ||
+                        CR_Streaming_Test == CR_TEST_PAPER_SHOCK         );
 
 
 // (3) reset other general-purpose parameters
@@ -180,6 +193,8 @@ void SetParameter()
       Aux_Message( stdout, "  CR_Streaming_Test     = %d\n",     CR_Streaming_Test  );
       Aux_Message( stdout, "  CR_Streaming_Dir      = %d\n",     CR_Streaming_Dir   );
       Aux_Message( stdout, "  CR_Streaming_FlowV    = %14.7e\n", CR_Streaming_FlowV );
+      Aux_Message( stdout, "  CR_Streaming_Ec0      = %14.7e\n", CR_Streaming_Ec0   );
+      Aux_Message( stdout, "  CR_Streaming_FcInit   = %d\n",     CR_Streaming_FcInit );
       Aux_Message( stdout, "=============================================================================\n" );
    }
 
@@ -245,6 +260,7 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
    const double yc = amr->BoxCenter[1];
 
    double Dens = 1.0, vx = 0.0, vy = 0.0, vz = 0.0, Pgas = 1.0, cr_E = 0.0;
+   double cr_F1 = 0.0;   // initial CR flux along x (zero for every test except the Sec 4.2.2 shock)
 
    switch ( CR_Streaming_Test )
    {
@@ -381,6 +397,25 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
          break;
       }
 
+      case CR_TEST_PAPER_SHOCK :
+      {
+//       Sec 4.2.2 (Fig 11): two symmetric gas streams collide at the box center and drive a
+//       CR-modified shock outward to each side.  This is the paper's OWN two-moment CR shock
+//       (full streaming + diffusion + advection), NOT the classic-module port (mode 8).
+//         rho = 1, Pgas = 1 uniform;   v = +FlowV for x<xc, -FlowV for x>xc   (paper: FlowV=10)
+//         Ec  = CR_Streaming_Ec0 uniform (paper: 1, 50, 200 -> Pc = Ec/3 = 1/3, 50/3, 200/3)
+//         initial CR flux is the advective flux Fc = (4/3) v Ec (CRs co-moving with the gas)
+//       Streaming uses a constant v_A = 1 (uniform B||x with rho=1 upstream); diffusion sigma'=10
+//       and Vm=100 come from Input__Parameter.  The x ghost zones are fixed to this IC (ShockBC).
+         const double v = ( x < xc ) ? CR_Streaming_FlowV : -CR_Streaming_FlowV;
+         Dens  = 1.0;
+         Pgas  = 1.0;
+         vx    = v;
+         cr_E  = CR_Streaming_Ec0;
+         cr_F1 = ( CR_Streaming_FcInit == 0 ) ? 0.0 : (4.0/3.0)*v*cr_E;
+         break;
+      }
+
       default :
          Aux_Error( ERROR_INFO, "unsupported CR_Streaming_Test (%d) !!\n", CR_Streaming_Test );
    } // switch ( CR_Streaming_Test )
@@ -408,9 +443,10 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
                                                  EoS_AuxArray_Int, h_EoS_Table );
    const double Etot = Hydro_ConEint2Etot( Dens, MomX, MomY, MomZ, Eint, 0.0 );   // do NOT include magnetic energy here
 
-// two-moment CR fields (Ec and the three flux components; initial flux = 0 as in the paper)
+// two-moment CR fields (Ec and the three flux components; flux = 0 except the Sec 4.2.2 shock,
+// which initializes the advective flux Fc = (4/3) v Ec)
    fluid[CR_E ] = cr_E;
-   fluid[CR_F1] = 0.0;
+   fluid[CR_F1] = cr_F1;
    fluid[CR_F2] = 0.0;
    fluid[CR_F3] = 0.0;
 
@@ -516,6 +552,7 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
       case CR_TEST_BLAST_2D :
       case CR_TEST_CLASSIC_DIFFUSION :   // B||x: classic diffusion is along x (kappa_para)
       case CR_TEST_CLASSIC_SHOCKTUBE :   // B||x (parallel to the 1D shock normal -> no magnetic force)
+      case CR_TEST_PAPER_SHOCK :         // B||x, |B|=1 -> v_A = 1 upstream (rho=1), as in Sec 4.2.2
       default :
 //       uniform field along x, |B| = 1
          magnetic[MAGX] = 1.0;
@@ -591,6 +628,32 @@ void BottleneckBC( real Array[], const int ArraySize[], real fluid[], const int 
    fluid[CR_F1] = -CRF1_active;
 
 } // FUNCTION : BottleneckBC
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  ShockBC
+// Description :  User boundary condition for the Sec 4.2.2 CR-modified shock test: the x ghost zones are
+//                fixed to the initial condition ("variables in the left and right ghost zones are fixed
+//                to be these initial values", Jiang & Oh 2018)
+//
+// Note        :  1. Linked to the function pointer "BC_User_Ptr" for both the -x and +x faces
+//                2. The shock forms at the box center and does not reach the boundary within the run
+//                   time, so this simply keeps the inflowing streams (v = +/-FlowV) steady at the edges
+//
+// Parameter   :  (same as BottleneckBC; only "fluid" and "pos" are used here)
+//
+// Return      :  fluid
+//-------------------------------------------------------------------------------------------------------
+void ShockBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+              const int GhostSize, const int idx[], const double pos[], const double Time,
+              const int lv, const int TFluVarIdxList[], double AuxArray[] )
+{
+
+// fixed ghost zones = initial condition
+   SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
+
+} // FUNCTION : ShockBC
 #endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 
 
@@ -640,6 +703,15 @@ void Init_TestProb_Hydro_CR_Streaming()
 //    uniform (Bx = 1) in this test, so SetBFieldIC already provides the correct ghost-zone values
 #     ifdef MHD
       BC_BField_User_Ptr             = SetBFieldIC;
+#     endif
+   }
+
+// the Sec 4.2.2 shock test fixes the x ghost zones to the initial (inflow) state
+   if ( CR_Streaming_Test == CR_TEST_PAPER_SHOCK )
+   {
+      BC_User_Ptr                    = ShockBC;
+#     ifdef MHD
+      BC_BField_User_Ptr             = SetBFieldIC;   // uniform Bx = 1 in the ghost zones
 #     endif
    }
 #  endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )

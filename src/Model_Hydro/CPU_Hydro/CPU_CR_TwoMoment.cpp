@@ -983,7 +983,12 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    const real dt_source = (real)0.5 * dt;
 
 // 1. Get current CR state (already has flux divergence applied)
-   real ec  = OneCell[CR_E];
+//    Floor CR_E before using it, matching Athena++'s post-transport floor (cr_transport.cpp:
+//    CRE is floored to TINY_NUMBER after every transport step): the half-step flux divergence
+//    can leave CR_E<0 in the strong-CR regime, and the generic passive-scalar floor in
+//    Hydro_RiemannPredict() runs only AFTER this function; a negative ec would otherwise give
+//    a negative Pc and be preserved by the "new_ec = ec_old" reset below
+   real ec  = FMAX( OneCell[CR_E], TINY_NUMBER );
    real fc1 = OneCell[CR_F1];
    real fc2 = OneCell[CR_F2];
    real fc3 = OneCell[CR_F3];
@@ -1204,7 +1209,11 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       const int idx_pvar = IDX321( i_pvar, j_pvar, k_pvar, N_HF_VAR, N_HF_VAR );
 
 //    1. get current CR state from g_Output (which already has flux divergence applied)
-      real ec  = g_Output[CR_E ][idx_out];
+//       CR_E is already non-negative here in practice: it is registered with FLOOR_YES, so
+//       Hydro_FullStepUpdate() floors it right after the flux-divergence update (matching
+//       Athena++'s post-transport floor in cr_transport.cpp); the FMAX below is kept as a
+//       cheap defensive floor so this function stays correct on its own
+      real ec  = FMAX( g_Output[CR_E ][idx_out], TINY_NUMBER );
       real fc1 = g_Output[CR_F1][idx_out];
       real fc2 = g_Output[CR_F2][idx_out];
       real fc3 = g_Output[CR_F3][idx_out];

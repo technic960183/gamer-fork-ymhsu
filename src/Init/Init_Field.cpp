@@ -151,10 +151,17 @@ void Init_Field()
    if ( Idx_ADV_VX    != ADV_VX    )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_VX    (%d != %d) !!\n", Idx_ADV_VX,    ADV_VX    );
    if ( Idx_ADV_SIGMA != ADV_SIGMA )    Aux_Error( ERROR_INFO, "inconsistent Idx_ADV_SIGMA (%d != %d) !!\n", Idx_ADV_SIGMA, ADV_SIGMA );
    // CR flux fields
+   // --> CR_F* are SIGNED reduced fluxes (Fc/Vm) and must never be floored; CR_E uses FLOOR_YES
+   //     to match Athena++'s post-transport floor (cr_transport.cpp: CRE floored to TINY_NUMBER
+   //     after every transport step): this floors CR_E in Hydro_FullStepUpdate() right after the
+   //     full-step flux divergence (before the implicit CR source solve), at IC assignment, and
+   //     in the AMR flux fix-up/restriction/interpolation paths. The half-step pre-source floor
+   //     is applied inside CR_TwoMomentSource_HalfStep() (CPU_CR_TwoMoment.cpp), because the
+   //     generic half-step passive floor in Hydro_RiemannPredict() runs after the CR source calls
    Idx_CR_F3 = AddField( "CR_F3", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
    Idx_CR_F2 = AddField( "CR_F2", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
    Idx_CR_F1 = AddField( "CR_F1", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
-   Idx_CR_E  = AddField( "CR_E" , FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );
+   Idx_CR_E  = AddField( "CR_E" , FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_YES, NORMALIZE_NO, INTERP_FRAC_NO );
    if ( Idx_CR_F3 != CR_F3 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F3 (%d != %d) !!\n", Idx_CR_F3, CR_F3 );
    if ( Idx_CR_F2 != CR_F2 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F2 (%d != %d) !!\n", Idx_CR_F2, CR_F2 );
    if ( Idx_CR_F1 != CR_F1 )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_F1 (%d != %d) !!\n", Idx_CR_F1, CR_F1 );

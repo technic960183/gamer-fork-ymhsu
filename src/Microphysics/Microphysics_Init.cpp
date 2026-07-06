@@ -36,6 +36,7 @@ void Microphysics_Init()
 #  ifdef CR_STREAMING
    MicroPhy.CR_source          = CR_SOURCE;
    MicroPhy.CR_stream          = CR_STREAM;
+   MicroPhy.CR_Ec_source       = CR_EC_SOURCE;
    MicroPhy.CR_vmax            = CR_VMAX;
 // CR_SIGMA/CR_SIGMA_PERP are the physical inverse-diffusion coefficients sigma' of Jiang & Oh (2018),
 // defined so that the field-aligned diffusivity is D = 1/(3*sigma') (Eq. 25, Sec. 4.1.4).

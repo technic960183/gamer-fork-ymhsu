@@ -21,6 +21,10 @@
 //
 //                CR_source          : Flag for enabling cosmic-ray source terms (runtime parameter: CR_SOURCE)
 //                CR_stream          : Flag for enabling cosmic-ray streaming (runtime parameter: CR_STREAM)
+//                CR_Ec_source       : Flag for including the CR energy source term in the two-moment update;
+//                                     0 solves the conservative system dEc/dt = -div(Fc) (Eq. 19 of
+//                                     Jiang & Oh 2018, used by their streaming test problems)
+//                                     (runtime parameter: CR_EC_SOURCE)
 //                CR_vmax            : Maximum velocity (effective speed of light) (runtime parameter: CR_VMAX)
 //                CR_sigma           : Code-unit opacity = Vm*CR_SIGMA, where CR_SIGMA is the physical inverse
 //                                     diffusion coefficient sigma' (D = 1/(3*CR_SIGMA)) (runtime parameter: CR_SIGMA)
@@ -46,6 +50,7 @@ struct MicroPhy_t
 #  ifdef CR_STREAMING
    bool CR_source;
    bool CR_stream;
+   bool CR_Ec_source;
    real CR_vmax;
    real CR_sigma;
    real CR_sigma_perp;

@@ -377,6 +377,7 @@ double CR_DIFF_MIN_B;
 #ifdef CR_STREAMING
 bool CR_SOURCE;
 bool CR_STREAM;
+bool CR_EC_SOURCE;
 double CR_VMAX;
 double CR_SIGMA;
 double CR_SIGMA_PERP;

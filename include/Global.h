@@ -405,6 +405,7 @@ extern double CR_DIFF_MIN_B;
 #ifdef CR_STREAMING
 extern bool   CR_SOURCE;
 extern bool   CR_STREAM;
+extern bool   CR_EC_SOURCE;
 extern double CR_VMAX;
 extern double CR_SIGMA;
 extern double CR_SIGMA_PERP;

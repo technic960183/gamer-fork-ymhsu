@@ -1021,7 +1021,8 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    const real v_adv_y = g_ConVar_In[ADV_VY][idx_fc];
    const real v_adv_z = g_ConVar_In[ADV_VZ][idx_fc];
    const real sigma_adv_perp = MicroPhy->CR_max_opacity;
-   const bool CR_stream      = MicroPhy->CR_stream;   // flag to enable streaming
+   const bool CR_stream      = MicroPhy->CR_stream;      // flag to enable streaming
+   const bool CR_Ec_source   = MicroPhy->CR_Ec_source;   // flag to include the CR energy source term
 
 // Total velocity = gas velocity + streaming velocity (streaming added only if enabled)
    real vtot1 = v1;
@@ -1097,10 +1098,15 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                                - coef_13 * coef_31 / coef_33
                                - coef_14 * coef_41 / coef_44;
 
-   real new_ec = rhs1 - coef_12 * rhs2 / coef_22 
-                      - coef_13 * rhs3 / coef_33 
+   real new_ec = rhs1 - coef_12 * rhs2 / coef_22
+                      - coef_13 * rhs3 / coef_33
                       - coef_14 * rhs4 / coef_44;
    new_ec /= e_coef;
+
+// CR_Ec_source=0 drops the CR energy source term so that the conservative system
+// dEc/dt = -div(Fc) (Eq. 19 of Jiang & Oh 2018) is solved; the flux equations keep
+// their full source terms
+   if ( !CR_Ec_source )   new_ec = rhs1;
 
 // Back-substitute to get new flux
    real newfr1 = ( rhs2 - coef_21 * new_ec ) / coef_22;
@@ -1134,7 +1140,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    RotateVec( sint, cost, sinp, cosp, v1_B, v2_B, v3_B );
 
    const real ec_source = v2_B * dpcdy_B + v3_B * dpcdz_B;
-   new_ec += dt_source * ec_source;
+   if ( CR_Ec_source )   new_ec += dt_source * ec_source;
 #  endif
 
 // 14. Floor CR energy
@@ -1192,8 +1198,9 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 // CR parameters
    const real vmax   = MicroPhy->CR_vmax;
    const real invlim = (real)1.0 / vmax;
-   const bool CR_source = MicroPhy->CR_source;   // flag to enable back-reaction to gas
-   const bool CR_stream = MicroPhy->CR_stream;   // flag to enable streaming
+   const bool CR_source = MicroPhy->CR_source;         // flag to enable back-reaction to gas
+   const bool CR_stream = MicroPhy->CR_stream;         // flag to enable streaming
+   const bool CR_Ec_source = MicroPhy->CR_Ec_source;   // flag to include the CR energy source term
 
    CGPU_LOOP( idx_out, CUBE(PS2) )
    {
@@ -1330,10 +1337,15 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                   - coef_13 * coef_31 / coef_33
                                   - coef_14 * coef_41 / coef_44;
 
-      real new_ec = rhs1 - coef_12 * rhs2 / coef_22 
-                        - coef_13 * rhs3 / coef_33 
+      real new_ec = rhs1 - coef_12 * rhs2 / coef_22
+                        - coef_13 * rhs3 / coef_33
                         - coef_14 * rhs4 / coef_44;
       new_ec /= e_coef;
+
+//    CR_Ec_source=0 drops the CR energy source term so that the conservative system
+//    dEc/dt = -div(Fc) (Eq. 19 of Jiang & Oh 2018) is solved; the flux equations keep
+//    their full source terms
+      if ( !CR_Ec_source )   new_ec = rhs1;
 
 //    back-substitute to get new flux
       real newfr1 = ( rhs2 - coef_21 * new_ec ) / coef_22;
@@ -1369,7 +1381,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       RotateVec( sint, cost, sinp, cosp, v1_B, v2_B, v3_B );
 
       const real ec_source = v2_B * dpcdy_B + v3_B * dpcdz_B;
-      new_ec += dt * ec_source;
+      if ( CR_Ec_source )   new_ec += dt * ec_source;
 #     endif
 
 //    14. floor CR energy

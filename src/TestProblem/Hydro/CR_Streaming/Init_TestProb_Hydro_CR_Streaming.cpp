@@ -35,6 +35,11 @@ static double CR_Streaming_Ec0;          // uniform CR energy density for the sh
 static int    CR_Streaming_FcInit;       // shock-test initial CR flux: 1 = advective Fc=(4/3)v*Ec (paper),
                                          // 0 = zero (avoids the sharp t=0 flux discontinuity at the collision;
                                          //     the flux relaxes to the advective value on ~1/(Vm*sigma))
+static int    CR_Streaming_GradOutflowBC; // 1 = gradient-preserving CR outflow BC on both x faces (streaming
+                                         // tests): linear-extrapolate Ec (positive-clamped) + copy Fc so the
+                                         // boundary Pc gradient keeps full strength and the profile tracks the
+                                         // Jiang & Oh (2018) analytic solution to the domain edge (Fig. 3);
+                                         // 0 = default public-Athena outflow copy (Ec ghost = last active cell)
 // =======================================================================================
 
 
@@ -45,6 +50,9 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 void ShockBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
               const int GhostSize, const int idx[], const double pos[], const double Time,
               const int lv, const int TFluVarIdxList[], double AuxArray[] );
+void GradOutflowBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+                    const int GhostSize, const int idx[], const double pos[], const double Time,
+                    const int lv, const int TFluVarIdxList[], double AuxArray[] );
 #endif
 
 
@@ -138,6 +146,7 @@ void SetParameter()
    ReadPara->Add( "CR_Streaming_FlowV", &CR_Streaming_FlowV,     0.0,         NoMin_double,     NoMax_double      );
    ReadPara->Add( "CR_Streaming_Ec0",   &CR_Streaming_Ec0,       1.0,         Eps_double,       NoMax_double      );
    ReadPara->Add( "CR_Streaming_FcInit", &CR_Streaming_FcInit,    1,           0,                1                 );
+   ReadPara->Add( "CR_Streaming_GradOutflowBC", &CR_Streaming_GradOutflowBC, 0, 0,               1                 );
 
    ReadPara->Read( FileName );
 
@@ -184,6 +193,22 @@ void SetParameter()
       }
    }
 
+// the gradient-preserving CR outflow BC needs the -x/+x fluid faces set to the user BC (=4);
+// reset them here so enabling the flag is a single switch (the user BC is enrolled in Init_TestProb)
+   if ( CR_Streaming_GradOutflowBC )
+   {
+      if ( OPT__BC_FLU[0] != BC_FLU_USER )
+      {
+         OPT__BC_FLU[0] = BC_FLU_USER;
+         PRINT_RESET_PARA( OPT__BC_FLU[0], FORMAT_INT, "(gradient-preserving CR outflow BC)" );
+      }
+      if ( OPT__BC_FLU[1] != BC_FLU_USER )
+      {
+         OPT__BC_FLU[1] = BC_FLU_USER;
+         PRINT_RESET_PARA( OPT__BC_FLU[1], FORMAT_INT, "(gradient-preserving CR outflow BC)" );
+      }
+   }
+
 
 // (4) make a note
    if ( MPI_Rank == 0 )
@@ -195,6 +220,7 @@ void SetParameter()
       Aux_Message( stdout, "  CR_Streaming_FlowV    = %14.7e\n", CR_Streaming_FlowV );
       Aux_Message( stdout, "  CR_Streaming_Ec0      = %14.7e\n", CR_Streaming_Ec0   );
       Aux_Message( stdout, "  CR_Streaming_FcInit   = %d\n",     CR_Streaming_FcInit );
+      Aux_Message( stdout, "  CR_Streaming_GradOutflowBC = %d\n", CR_Streaming_GradOutflowBC );
       Aux_Message( stdout, "=============================================================================\n" );
    }
 
@@ -662,6 +688,87 @@ void ShockBC( real Array[], const int ArraySize[], real fluid[], const int NVar_
    SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
 
 } // FUNCTION : ShockBC
+
+
+
+//-------------------------------------------------------------------------------------------------------
+// Function    :  GradOutflowBC
+// Description :  Gradient-preserving CR outflow boundary condition on the -x and +x faces (streaming tests)
+//
+// Note        :  1. Linked to the function pointer "BC_User_Ptr" for BOTH the -x and +x faces
+//                   (OPT__BC_FLU_XM/XP are reset to user=4 in SetParameter when CR_Streaming_GradOutflowBC=1)
+//                2. The gas (DENS/MOM/ENGY) keeps standard outflow behavior; for the streaming tests the gas
+//                   is frozen (CR_SOURCE=0, uniform IC), so the SetGridIC background equals the outflow-copy
+//                   state exactly.  The CR fluxes Fc1/2/3 are copied from the last active cell (outflow).
+//                3. The CR energy density is LINEARLY EXTRAPOLATED along the face normal from the two nearest
+//                   active cells (positive-clamped): Ec_ghost(n) = max( Ec_last + n*(Ec_last - Ec_lastm1), TINY ).
+//                   --> the enrolled opacity central-difference b.grad(Pc) and the transport flux both see the
+//                       interior slope through the boundary, so v_adv and sigma_adv keep full strength and the
+//                       CRs stream out at the physical rate (4/3) v_A Ec instead of jamming (Jiang & Oh 2018 Fig 3).
+//                   --> the public-Athena copy BC (default) instead halves b.grad(Pc) at the last active cell
+//                       (Ec_ghost = Ec_last), which flattens Ec over the last ~12 cells.
+//                4. The ghost streaming fields (ADV_SIGMA/ADV_VX/VY/VZ) do NOT need to be filled here: they are
+//                   recomputed from the extrapolated Ec by CR_UpdateOpacity() over indices [1, FLU_NXT-2] before
+//                   the flux uses them (see CPU_FluidSolver_MHM.cpp).  We leave the SetGridIC defaults.
+//                5. The interior (active) cells are already filled in the prepared "Array" when the domain-boundary
+//                   ghost zones are set, so we read the last two active cells directly (same mechanism as BottleneckBC).
+//
+// Parameter   :  (same as BottleneckBC / ShockBC)
+//
+// Return      :  fluid
+//-------------------------------------------------------------------------------------------------------
+void GradOutflowBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
+                    const int GhostSize, const int idx[], const double pos[], const double Time,
+                    const int lv, const int TFluVarIdxList[], double AuxArray[] )
+{
+
+// start from the frozen background (correct gas state for CR_SOURCE=0 + safe CR/ADV defaults)
+   SetGridIC( fluid, pos[0], pos[1], pos[2], Time, lv, AuxArray );
+
+// map the prepared 1D "Array" to 4D [NVar_Flu][k][j][i]
+   typedef real (*vla)[ ArraySize[2] ][ ArraySize[1] ][ ArraySize[0] ];
+   vla Array3D = ( vla )Array;
+
+   const int ig = idx[0];
+   const int jg = idx[1];
+   const int kg = idx[2];
+   const int Nx = ArraySize[0];
+
+// identify the x-face and the two nearest active cells along the outward normal
+   int i_last, i_lastm1, ndepth;
+   if ( ig < GhostSize )                     // -x ghost zone
+   {
+      i_last   = GhostSize;                  // last active cell (adjacent to the -x boundary)
+      i_lastm1 = GhostSize + 1;              // one cell further into the interior
+      ndepth   = GhostSize - ig;             // 1, 2, ... outward from the boundary
+   }
+   else                                      // +x ghost zone ( ig >= Nx - GhostSize )
+   {
+      i_last   = Nx - GhostSize - 1;         // last active cell (adjacent to the +x boundary)
+      i_lastm1 = Nx - GhostSize - 2;
+      ndepth   = ig - i_last;                // 1, 2, ...
+   }
+
+// read Ec (two active cells) and Fc1/2/3 (last active cell) from the prepared interior
+   real Ec_last = 0.0, Ec_lastm1 = 0.0, Fc1 = 0.0, Fc2 = 0.0, Fc3 = 0.0;
+   for (int v=0; v<NVar_Flu; v++)
+   {
+      const int f = TFluVarIdxList[v];
+      if      ( f == CR_E  ) { Ec_last = Array3D[v][kg][jg][i_last]; Ec_lastm1 = Array3D[v][kg][jg][i_lastm1]; }
+      else if ( f == CR_F1 )   Fc1     = Array3D[v][kg][jg][i_last];
+      else if ( f == CR_F2 )   Fc2     = Array3D[v][kg][jg][i_last];
+      else if ( f == CR_F3 )   Fc3     = Array3D[v][kg][jg][i_last];
+   }
+
+// gradient-preserving Ec (linear extrapolation, positive-clamped) + outflow-copy Fc
+   const real CR_EC_TINY = (real)1.0e-30;
+   const real ec_extrap  = Ec_last + (real)ndepth*( Ec_last - Ec_lastm1 );
+   fluid[CR_E ] = FMAX( ec_extrap, CR_EC_TINY );
+   fluid[CR_F1] = Fc1;
+   fluid[CR_F2] = Fc2;
+   fluid[CR_F3] = Fc3;
+
+} // FUNCTION : GradOutflowBC
 #endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )
 
 
@@ -720,6 +827,17 @@ void Init_TestProb_Hydro_CR_Streaming()
       BC_User_Ptr                    = ShockBC;
 #     ifdef MHD
       BC_BField_User_Ptr             = SetBFieldIC;   // uniform Bx = 1 in the ghost zones
+#     endif
+   }
+
+// the gradient-preserving CR outflow BC (streaming tests) uses the user fluid BC on both x faces
+// (OPT__BC_FLU_XM/XP were reset to user in SetParameter); the field is uniform, so SetBFieldIC
+// supplies the (copy) B ghost values
+   if ( CR_Streaming_GradOutflowBC )
+   {
+      BC_User_Ptr                    = GradOutflowBC;
+#     ifdef MHD
+      BC_BField_User_Ptr             = SetBFieldIC;
 #     endif
    }
 #  endif // #if ( MODEL == HYDRO  &&  defined CR_STREAMING )

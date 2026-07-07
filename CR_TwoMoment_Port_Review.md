@@ -1,0 +1,87 @@
+# CR two-moment port review: GAMER vs Athena++
+
+I compared [CPU_CR_TwoMoment.cpp](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp) + the [MHM_RP integrator hooks](src/Model_Hydro/CPU_Hydro/CPU_FluidSolver_MHM.cpp) line-by-line against Athena++'s `cr_flux.cpp`, `cr_transport.cpp`, `cr_source.cpp`, `cr.cpp`, and the VL2 task list in `time_integrator.cpp`. **The core algorithm is faithfully replicated — HLLE flux, implicit source solve, rotations, vdiff, and the opacity/streaming update cadence all match term-by-term — but I found one systemic constant mismatch (TINY_NUMBER), three coupled-gas/state-selection differences that make machine-precision matching impossible whenever gas or B evolves, one patch-boundary contamination path through the stored ADV_* fields, plus several edge-case and naming issues.** Nothing here invalidates your static-gas test agreements; most differences vanish when v=0 and B is static, which is exactly what your suites test.
+
+One process note first: `git diff main..HEAD` (two dots) mixes in upstream drift — the dual-energy-guard "deletion" it shows is actually a commit on `main` after your branch point, not your change. Use `main...HEAD`; the branch itself touches 76 files. You'll want to rebase before the PR anyway.
+
+---
+
+## A. Verified to match Athena exactly
+
+- **HLLE flux** ([CPU_CR_TwoMoment.cpp:559-638](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L559-L638) vs `cr_flux.cpp`): wave speeds `min(meanadv−meandiffv, vL−vdiffL)`, ±vmax·√(1/3) clamp, bp/bm, and the flux formula — identical term order.
+- **Implicit source matrix** (both step-halves): all coefficients match `cr_source.cpp:141-182` exactly, including the `CR_EC_SOURCE`/`ec_src_flag` bypass you added to both codes.
+- **Rotations**: `RotateVec`/`InvRotateVec` are exact copies of `rotate_vectors.cpp`; `CR_ComputeBFieldAngles` matches the `b_angle` conventions including both TINY fallbacks (but see finding 1 on the threshold value).
+- **vdiff**: tau = taufact·σ·dh, `tau²/(2·⅓)`, the `tau < 1e-3` asymptotic switch (your `CR_TAU_ASYM_LIM` default 1e-3 = Athena's hard-coded constant), vmax·√(⅓)·diffv, rotate→abs→add `vflx·√(4Ec/9ρ)` — identical, and correctly evaluated at **cell centers** with `vdiff_L = v_diff[i-1], vdiff_R = v_diff[i]`, matching Athena's pattern.
+- **Streaming update (flux-divergence grad)** and **opacity update (central-difference grad, `(Ec[i+1]−Ec[i−1])/3/(2dx)`)**: formulas match `DefaultStreaming`/`DefaultOpacity`, and the **alternating cadence is right**: start-of-step `CR_UpdateOpacity` ≡ Athena's end-of-stage-2 `CRTC_OPACITY`; half-step flux → `CR_UpdateStreaming` → half-step source ≡ Athena stage 1; end-of-`Hydro_RiemannPredict` `CR_UpdateOpacity` ≡ end-of-stage-1 opacity; full-step flux → streaming → source ≡ stage 2. I traced every index offset (`half_offset`, `fc2pvar_offset`, `out_offset`) — the flux-cell↔pvar-cell↔PS2-cell alignments are all correct, and the update regions exactly cover what the source/flux later read.
+- **Staging**: donor-cell at half step ≡ Athena's forced `order=1` at VL2 stage 1; PLM at full step. With `OPT__LR_LIMITER=1` (van Leer), GAMER's `2·dLdR/(dL+dR)` is bit-identical in form to Athena's uniform-Cartesian PLM branch. dt weights (0.5dt / dt), both stages updating from the t^n base state, match VL2.
+- **Centering**: cell-centered B is used everywhere in the CR code (t^n B for half-step flux/streaming, half-step CT-updated B for full-step flux/streaming/source), matching Athena's `bcc` usage stage-by-stage — with one exception (finding 4). Face→center averaging (`MHD_GetCellCenteredBField`) is the same 0.5(BL+BR) operation as Athena's bcc.
+- **Floors and flux fix-up**: CR_E `FLOOR_YES` reproduces Athena's post-transport floor placement (before source, both steps); CR_F* correctly unfloored; CR_E/CR_F* `FIXUP_FLUX_YES` ≡ Athena's `cr_bvar` flux correction; ADV_* `FIXUP_FLUX_NO`, `NORMALIZE_NO`, `INTERP_FRAC_NO` — so passive normalization/fraction machinery can't corrupt them.
+- **Defaults**: `CR_TAUFACT=1.0` = `taucell`; `CR_VEL_FLX_FLAG=0` = `vflx`; `CR_MAX_OPACITY=1e10` = Athena `BIG_NUMBER` (1e10); `CR_STREAM=1` = `vs_flag`; `CR_EC_SOURCE=1` = `ec_src_flag`.
+- **Coverage of hydro-flux overwrites**: `CR_TwoMomentFlux_FullStep` uses the identical bounds table as `Hydro_ComputeFlux`, so every face used by `Hydro_FullStepUpdate` and `Hydro_StoreIntFlux` carries two-moment values in the CR slots. At the half step, the transverse-edge faces CR skips (`flux_offset=1`) are only ever read for the CT electric field (momentum/B slots), never CR slots — safe.
+
+---
+
+## B. Differences that break double-precision matching
+
+### 1. `TINY_NUMBER`: GAMER `__DBL_MIN__` (~2.2e-308) vs Athena `1.0e-20` — systemic
+[Macro.h:1054](include/Macro.h#L1054) vs Athena `defs.hpp:146`. This constant appears in physics-relevant thresholds throughout the kernel:
+- **`dpc_sign` deadband** ([CPU_CR_TwoMoment.cpp:170-173](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L170-L173), and in `CR_UpdateOpacity`): Athena treats |B·∇Pc| ≤ 1e-20 as *zero* → no streaming; GAMER streams at full ±v_A for any gradient above 2.2e-308. At plateaus/extrema where ∇Pc is pure roundoff, the two codes pick different streaming states. This is precisely your "sgn amplifier" regime — part of the triangular-test 1e-8 residual is likely irreducible until this matches.
+- **CR_E floor value**: Athena floors to 1e-20; GAMER to DBL_MIN. Downstream, `sigma_adv ∝ 1/Ec` diverges wildly between the two at floored cells.
+- Also: `va > TINY`, `btot > TINY`, HLLE `|bm−bp| > TINY`, and the source floor `new_ec < TINY` (Athena uses `< 0.0` there).
+
+Suggestion: define a CR-module constant equal to 1e-20 rather than reusing GAMER's `TINY_NUMBER`.
+
+### 2. Gas state fed to the implicit source solve
+Athena's `AddSourceTerms` receives `ph->u` **after** the current stage's hydro flux-divergence (task order: `INT_HYD` runs before `SRCTERM_CRTC`), so ρ and v in the solve are stage-updated. GAMER instead uses:
+- half step: `g_ConVar_In` = **t^n** state ([CPU_CR_TwoMoment.cpp:997-1000](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L997-L1000)) — Athena stage 1 uses the *half-step-updated* u;
+- full step: `g_PriVar_Half` ([CPU_CR_TwoMoment.cpp:1230-1233](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L1230-L1233)) — Athena stage 2 uses the *full-step post-transport* u.
+
+The matching data exists in both places (`out_con` at half step, `g_Output` at full step), so this is fixable if exact parity for live gas is wanted. Static gas: no effect.
+
+### 3. No gas back-reaction at the half step
+Athena's `AddSourceTerms` is stage-agnostic: at stage 1 (β=0.5) it also applies the momentum/energy kick to the half-step gas (when `src_flag>0`). GAMER deliberately skips it ([CPU_CR_TwoMoment.cpp:1150](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L1150) "No back-reaction to gas at half-step"). With `CR_SOURCE=1` and live gas, the half-step gas state — which feeds the full-step reconstruction and stage-2 sources — differs at O(dt) from Athena's. Irrelevant for your `CR_SOURCE=0` suites, but it means the coupled problem can never match to machine precision.
+
+### 4. `ec_source` (perpendicular heating) uses a different gradient operator
+Athena computes `grad_pc_` from the **flux divergence of the CR-flux equations** (`cr_transport.cpp:360-436`) and uses it for the `v_perp·∇Pc` heating; GAMER recomputes it by **central difference of Ec/3** ([CPU_CR_TwoMoment.cpp:1124-1143](src/Model_Hydro/CPU_Hydro/CPU_CR_TwoMoment.cpp#L1124-L1143) and 1364-1385). Same order of accuracy, different discrete values whenever v_perp·∇Pc ≠ 0 (multi-D, moving gas, oblique B). Your source functions already receive `g_Flux` — the Athena-consistent value could be built exactly the way `CR_UpdateStreaming` builds `grad_pc`. Also note the **sigma_adv** used by the sources *does* use the flux-divergence gradient in both codes ✓ — only the heating term diverges.
+
+### 5. Half-step source uses half-step B; Athena stage 1 uses t^n B
+GAMER reads `OneCell[MAG_OFFSET+…]`, which is the **CT-half-step-updated** cell-centered B (written just before the CR source in `Hydro_RiemannPredict`). Athena's stage-1 source uses `b_angle` computed from **t^n** bcc (set by the previous step's `CRTC_OPACITY`). Affects rotation angles and the vtot decomposition; zero for static B.
+
+### 6. Floor-vs-gas-energy ordering in the source (with `CR_SOURCE=1`)
+Athena (`cr_source.cpp:194-200`): gas energy is updated with the **unfloored** `new_ec`, *then* `new_ec<0 → ec` — the gas silently gains `(ec − new_ec) > 0` when the reset triggers. GAMER floors first (steps 14→15), so the gas sees the floored value and nothing is created. GAMER's behavior is arguably better physics, but it is not Athena's. Also, Athena floors `rho = max(rho, rho_floor)` in the source; GAMER doesn't floor ρ there.
+
+### 7. Stored `ADV_*` fields: passive-advection contamination + stale outer ghost ring
+Two coupled issues:
+- The HLLE passive loop still advects ADV_SIGMA/ADV_VX/VY/VZ (and CR_E/CR_F*, though those get overwritten) — the skip in [CPU_Shared_RiemannSolver_HLLE.cpp:687](src/Model_Hydro/CPU_Hydro/CPU_Shared_RiemannSolver_HLLE.cpp#L687) is **commented out**. So `Hydro_RiemannPredict`/`Hydro_FullStepUpdate` apply advection flux-divergence to ADV_*, and what gets **stored in the patch at step end** is "half-step streaming values ± advection", not Athena's end-of-step `DefaultOpacity` values.
+- At the next step, `CR_UpdateOpacity` overwrites cells 1…FLU_NXT−2, but the **outermost ghost ring (cells 0 and FLU_NXT−1) keeps the stored/ghost-filled stale values**. That ring feeds vdiff of the outermost half-step faces, and I traced the chain — face(0,1) → half-step cell 1 → PLM slope of FC cell 0 → full-step flux 0 → **PS2 edge cell** — it reaches the final output within a single step. Athena has no analogue (its face fluxes always see locally-recomputed sigma). This seeds small patch-boundary deviations every step even in static tests, and may be a contributor to residuals you've attributed elsewhere.
+
+Recommendation: decide whether to enable the HLLE skip (and zero those flux slots so ADV_* is passed through untouched, making stored values well-defined), and document the ghost-ring inconsistency; fully eliminating it would need either sigma recomputation with one-sided differences at the ring or a wider ghost region.
+
+### 8. MinMod retry loop uses mutated sigma
+On a full-step failure (`s_FullStepFailure`), the `do{}while` re-runs reconstruction + fluxes — but by then `CR_UpdateStreaming` has already **overwritten** ADV_* in `g_PriVar_Half` with flux-divergence values, so the retry's vdiff uses different sigma than the first attempt (and than Athena). Rare path, but iteration-dependent. Similarly, GAMER's 1st-order-flux-correction fallback in `Flu_Close` would update CR fields with pure hydro passive fluxes (no two-moment physics) on failing cells.
+
+---
+
+## C. Edge-case behavior differences (report-only)
+
+- **`va ≤ TINY` fallback**: Athena's `DefaultStreaming` leaves `sigma_adv` *unchanged* (keeps the previous value); GAMER sets `max_opacity`. GAMER also adds an `Ec > TINY` guard Athena lacks — at floored cells Athena's `sigma_adv` blows up ∝1/Ec while GAMER caps it, giving up to factor~2 different total sigma there.
+- **dt semantics**: Athena uses one `cfl_number` with per-cell speed `max(|v|+c_fast, vmax)`; GAMER has an independent `CR_CFL·dh/vmax` criterion alongside the hydro `DT__FLUID` criterion. Equivalent while vmax dominates and `CR_CFL` = Athena's cfl; diverges if gas speeds approach vmax (different safety factors take over).
+- **Dimensionality**: Athena zeroes `v_diff` components in collapsed dimensions *before* rotation (1D/2D runs); GAMER always computes all three. Harmless when B is axis-aligned in 1D (flat-direction fluxes cancel), but with oblique B a GAMER 3D run will not match an Athena 1D/2D run's rotated vdiff.
+- **Defaults that differ from Athena**: `CR_SOURCE` defaults **false** vs Athena `src_flag=1`; `CR_VMAX` default 1e2 vs Athena 1.0. Fine if deliberate, but worth stating in the PR.
+- **Units**: GAMER input `CR_SIGMA` is paper σ′ (internally ×Vm, [Microphysics_Init.cpp](src/Microphysics/Microphysics_Init.cpp)), while Athena's input is already the internal σ. Well-commented in code, but this input-convention divergence from Athena must be prominent in the PR/wiki — it's already caused one bug historically.
+- **BC cadence**: GAMER fills ghosts once per step vs Athena's per-stage `PHY_BVAL`; the in-half-step `CR_UpdateOpacity` therefore uses evolved ghost data rather than re-imposed BCs near domain edges. This is the difference your team already deemed acceptable — noting it maps to this specific call.
+- Machine-precision matching also requires the GAMER build be `--double=true`; nothing enforces that for CR_STREAMING.
+
+## D. Naming / hygiene (you asked for these explicitly)
+
+- `CR_ComputeVdiff`: `vdiff_Bx/By/Bz` keep their "_B(-frame)" names *after* `InvRotateVec` converts them to lab frame; the function then returns "vdiff_Bx" for direction x. Correct but actively misleading.
+- `CR_TwoMomentSource_HalfStep` parameters `idx_fc`/`didx_fc` are **cell-centered** indices into `g_ConVar_In` (the caller passes `idx_in`) — "fc" reads as face-centered.
+- `g_PriVar_Half` holds **conserved** data at the point `CR_UpdateOpacity` is called inside `Hydro_RiemannPredict` (before Con2Pri). It works because only DENS/CR_E/B are read, but that's a trap for future editors — worth a comment.
+- CR_F1..3 store the **reduced** flux Fc/vmax (same as Athena's u_cr, so correct), but no header/Macro.h comment says so. Document at the field definitions in [Macro.h:325-336](include/Macro.h#L325-L336).
+- Unused parameters: `g_FC_B` in `CR_TwoMomentFlux_HalfStep`; `g_FC_B_Half` in `..._FullStep` (plus `idx_fc_B`, `stride_fc_B`, `sizeB_i/j` computed then never used); `g_Flux`, `g_FC_Var`, `EoS` in `CR_TwoMomentSource_FullStep`; `EoS` in `..._HalfStep`; `TDir1/TDir2`, `_dh` in both flux functions. These strongly suggest face-centered B is used when it isn't — trim before the PR.
+- Dead code: the non-MHD `Bx=0,By=0,Bz=1` fallbacks (MHD is compile-enforced in [Aux_Check_Parameter.cpp:1936](src/Auxiliary/Aux_Check_Parameter.cpp#L1936)); the commented-out HLLE skip; the empty doc header of `CR_TwoMomentFlux_HalfStep` ("Description :", "Reference : [1]"), the `FUMCTION` typo at line 774, and the step numbering gaps (…6→10, 13→16) in both source functions.
+- The comment at the full-step source call ("update opacity after full-step source computation (DefaultOpacity)") describes a call that was moved away — reword so it doesn't read like a missing call.
+
+---
+
+**Bottom line**: for the fixed-gas, fixed-B test regime you validated, the port is an accurate replica, and the residuals you've measured are consistent with findings 1 and 7. To claim machine-precision equivalence for the *coupled* problem (CR_SOURCE=1, live gas/B), items 2–6 would each need to be aligned (or explicitly documented as accepted deviations, like the BC cadence). Items in D are pre-PR cleanup. Happy to draft fixes for any subset — 1, 4, and the HLLE/ADV_* cleanup (7) are the most mechanical.

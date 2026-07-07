@@ -73,6 +73,7 @@ On a full-step failure (`s_FullStepFailure`), the `do{}while` re-runs reconstruc
 - Machine-precision matching also requires the GAMER build be `--double=true`; nothing enforces that for CR_STREAMING.
 
 ## D. Naming / hygiene (you asked for these explicitly)
+(mostly fixed on July 7)
 
 - `CR_ComputeVdiff`: `vdiff_Bx/By/Bz` keep their "_B(-frame)" names *after* `InvRotateVec` converts them to lab frame; the function then returns "vdiff_Bx" for direction x. Correct but actively misleading.
 - `CR_TwoMomentSource_HalfStep` parameters `idx_fc`/`didx_fc` are **cell-centered** indices into `g_ConVar_In` (the caller passes `idx_in`) — "fc" reads as face-centered.

@@ -160,26 +160,26 @@ void CR_AddDiffuseFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 #ifdef CR_STREAMING
 void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                                   real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],
+                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],   //unuse
                             const real g_CC_B[][ CUBE(FLU_NXT) ],
                             const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
                                  const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                        real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
+                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],   //unuse
                                  const int NFlux, const int NSkip_N, const int NSkip_T,
                                  const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
-                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                            const int idx_fc, const int didx_fc[3],
-                            const int idx_flux, const int didx_flux[3],
-                            const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
+                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
+                            const int idx_in, const int didx_in[3],
+                            const int idx_flux, const int didx_flux[3],   //unuse (both)
+                            const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );   //unuse: EoS
 void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
-                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
-                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );
+                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
+                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],   //unuse
+                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );   //unuse: EoS
 void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
                        const real g_CellVar[][ CUBE(FLU_NXT) ],
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
@@ -669,8 +669,9 @@ void CPU_FluidSolver_MHM(
             CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG, g_FC_Var_1PG,
                                          dt, dh, &EoS, &MicroPhy );
 
-//          update opacity after full-step source computation (DefaultOpacity)
-//          CR_UpdateOpacity() has been moved to before half-step flux computation (step 1-a-1)
+//          NOTE: no opacity update here; Athena++'s end-of-stage-2 DefaultOpacity call corresponds to
+//                the CR_UpdateOpacity() call at the beginning of the NEXT step (step 1-a-1), which
+//                operates on the ghost-filled input data of that step
 #           endif
 
 
@@ -1047,6 +1048,9 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 //  update opacity after half-step source computation (DefaultOpacity)
 //  Uses CENTRAL DIFFERENCE grad(Pc) for next step's flux calculation
 //  output: g_PriVar_Half, input: same array for Ec neighbors, B from g_PriVar_Half[MAG_OFFSET+*]
+//  NOTE: g_PriVar_Half[] holds PRIMITIVE variables here (Con2Pri already applied in the loop above);
+//        safe because CR_UpdateOpacity() only reads DENS/CR_E/B, which are identical in the
+//        conserved and primitive representations
 #  ifdef CR_STREAMING
 #  ifdef __CUDACC__
    __syncthreads();

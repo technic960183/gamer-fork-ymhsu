@@ -307,6 +307,10 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 //                  after AddSourceTerms in the task list)
 //               4. The sigma_adv and v_adv computed here will be used in the NEXT timestep's
 //                  flux calculation
+//               5. g_Output may hold either conserved data (g_Flu_Array_In) or primitive data
+//                  (g_PriVar_Half, i.e. AFTER Con2Pri in Hydro_RiemannPredict): safe because only
+//                  DENS, CR_E, and ADV_* are accessed, which are identical in the two
+//                  representations (CR passive fields are not converted by Hydro_Con2Pri())
 //
 // Parameter   : g_Output     : Flat pointer to the output array for updated opacity
 //               OutStride    : Stride between variables in g_Output (CUBE(FLU_NXT) or CUBE(PS2))
@@ -511,29 +515,30 @@ static real CR_ComputeVdiff( const real sigma_adv,
    else
       diffv_z = SQRT( ( (real)1.0 - EXP(-tau_z) ) / tau_z );
 
-// v_diff in B-aligned frame
-   real vdiff_Bx = vmax * SQRT(edd) * diffv_x;
-   real vdiff_By = vmax * SQRT(edd) * diffv_y;
-   real vdiff_Bz = vmax * SQRT(edd) * diffv_z;
+// v_diff in B-aligned frame (component 1 = parallel to B, components 2/3 = perpendicular)
+   real vdiff_1 = vmax * SQRT(edd) * diffv_x;
+   real vdiff_2 = vmax * SQRT(edd) * diffv_y;
+   real vdiff_3 = vmax * SQRT(edd) * diffv_z;
 
 // rotate from B-aligned frame to lab frame
-   InvRotateVec( sint, cost, sinp, cosp, vdiff_Bx, vdiff_By, vdiff_Bz );
+// --> vdiff_1/2/3 hold the lab-frame x/y/z components from here on
+   InvRotateVec( sint, cost, sinp, cosp, vdiff_1, vdiff_2, vdiff_3 );
 
 // take absolute value
-   vdiff_Bx = FABS( vdiff_Bx );
-   vdiff_By = FABS( vdiff_By );
-   vdiff_Bz = FABS( vdiff_Bz );
+   vdiff_1 = FABS( vdiff_1 );
+   vdiff_2 = FABS( vdiff_2 );
+   vdiff_3 = FABS( vdiff_3 );
 
 // add CR sound speed for stability
    const real cr_sound = MicroPhy->CR_vel_flx_flag * SQRT( ((real)4.0/(real)9.0) * Ec / rho );
-   vdiff_Bx += cr_sound;
-   vdiff_By += cr_sound;
-   vdiff_Bz += cr_sound;
+   vdiff_1 += cr_sound;
+   vdiff_2 += cr_sound;
+   vdiff_3 += cr_sound;
 
 // return component along flux direction
-   if ( fdir == 0 )      return vdiff_Bx;
-   else if ( fdir == 1 ) return vdiff_By;
-   else                  return vdiff_Bz;
+   if ( fdir == 0 )      return vdiff_1;
+   else if ( fdir == 1 ) return vdiff_2;
+   else                  return vdiff_3;
 
 } // FUNCTION : CR_ComputeVdiff
 
@@ -642,11 +647,14 @@ static void CR_ComputeHLLEFlux( const real Ec_L, const real Ec_R,
 //-------------------------------------------------------------------------------------------------------
 // Function    : CR_TwoMomentFlux_HalfStep
 //
-// Description : 
+// Description : Compute the half-step CR two-moment HLLE fluxes using donor-cell (first-order) states
 //
-// Note        : 1.
+// Note        : 1. Donor-cell reconstruction matches Athena++'s forced first-order reconstruction
+//                  at VL2 stage 1
+//               2. vdiff is evaluated at cell centers with the stored ADV_SIGMA
+//               3. Overwrites the CR slots of g_Flux_Half[] computed by Hydro_RiemannPredict_Flux()
 //
-// Reference   : [1] 
+// Reference   : Athena++ src/cr/integrators/cr_transport.cpp, cr_flux.cpp
 //
 // Parameter   : g_Con_Var   : Array storing the input cell-centered conserved fluid variables
 //               g_Flux_Half : Array with hydrodynamic fluxes for adding the cosmic-ray diffusive fluxes
@@ -660,22 +668,22 @@ static void CR_ComputeHLLEFlux( const real Ec_L, const real Ec_R,
 GPU_DEVICE
 void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                                   real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],
+                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],   //unuse
                             const real g_CC_B[][ CUBE(FLU_NXT) ],
                             const real dh, const MicroPhy_t *MicroPhy )
-{  
+{
 
 
    const int  didx_cvar[3] = { 1, FLU_NXT, SQR(FLU_NXT) };
    const int  flux_offset  = 1;  // skip the additional fluxes along the transverse directions for computing the CT electric field
-   const real _dh          = (real)1.0 / dh;
+   const real _dh          = (real)1.0 / dh;   //unuse
 
    for (int d=0; d<3; d++)
    {
-      const int TDir1 = (d+1)%3;    // transverse direction 1
-      const int TDir2 = (d+2)%3;    // transverse direction 2
+      const int TDir1 = (d+1)%3;    // transverse direction 1   //unuse
+      const int TDir2 = (d+2)%3;    // transverse direction 2   //unuse
 
-      int sizeB_i, sizeB_j, stride_fc_B;
+      int sizeB_i, sizeB_j, stride_fc_B;   //unuse (assigned in the switch below but only feed the unused idx_fc_B)
       int size_i, size_j, size_k;
       int i_offset, j_offset, k_offset;
 
@@ -714,7 +722,7 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          const int idx_cvar = IDX321( i_cvar, j_cvar, k_cvar, FLU_NXT, FLU_NXT );
 
 //       face-centered magnetic field index
-         const int idx_fc_B = IDX321( i_cvar, j_cvar, k_cvar, sizeB_i, sizeB_j ) + stride_fc_B;
+         const int idx_fc_B = IDX321( i_cvar, j_cvar, k_cvar, sizeB_i, sizeB_j ) + stride_fc_B;   //unuse
 
 //       get left and right cell indices
          const int idx_L = idx_cvar;
@@ -771,7 +779,7 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
    } // for (int d=0; d<3; d++)
 
 
-} // FUMCTION : CR_TwoMomentFlux_HalfStep
+} // FUNCTION : CR_TwoMomentFlux_HalfStep
 
 
 
@@ -803,13 +811,13 @@ GPU_DEVICE
 void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
                                  const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                        real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],
+                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],   //unuse
                                  const int NFlux, const int NSkip_N, const int NSkip_T,
                                  const real dh, const MicroPhy_t *MicroPhy )
 {
    const int  didx_fc[3]   = { 1, N_FC_VAR, SQR(N_FC_VAR) };
    const int  didx_pvar[3] = { 1, N_HF_VAR, SQR(N_HF_VAR) };
-   const real _dh          = (real)1.0 / dh;
+   const real _dh          = (real)1.0 / dh;   //unuse
 
 // offset from g_FC_Var index to g_PriVar_Half index
 // g_FC_Var has size N_FC_VAR, g_PriVar_Half has size N_HF_VAR
@@ -820,10 +828,10 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
    {
       const int faceL = 2*d;        // left face index
       const int faceR = faceL + 1;  // right face index
-      const int TDir1 = (d+1)%3;    // transverse direction 1
-      const int TDir2 = (d+2)%3;    // transverse direction 2
+      const int TDir1 = (d+1)%3;    // transverse direction 1   //unuse
+      const int TDir2 = (d+2)%3;    // transverse direction 2   //unuse
 
-      int sizeB_i, sizeB_j, stride_fc_B;
+      int sizeB_i, sizeB_j, stride_fc_B;   //unuse (assigned in the switch below but only feed the unused idx_fc_B)
       int idx_fc_s[3], idx_flux_e[3];
 
       switch ( d )
@@ -867,7 +875,7 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
          const int idx_pvar = IDX321( i_pvar, j_pvar, k_pvar, N_HF_VAR, N_HF_VAR );
 
 //       face-centered B index
-         const int idx_fc_B = IDX321( i_pvar, j_pvar, k_pvar, sizeB_i, sizeB_j ) + stride_fc_B;
+         const int idx_fc_B = IDX321( i_pvar, j_pvar, k_pvar, sizeB_i, sizeB_j ) + stride_fc_B;   //unuse
 
 //       get left and right cell indices for cell-centered arrays (g_PriVar_Half)
          const int idx_pvar_L = idx_pvar;
@@ -951,10 +959,10 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
 // Reference   : Athena++ cr_source.cpp, time_integrator.cpp
 //
 // Parameter   : OneCell     : Single-cell fluid array (already updated with flux divergence)
-//               g_ConVar_In : Array storing the input conserved variables
+//               g_ConVar_In : Array storing the input cell-centered conserved variables
 //               g_Flux_Half : Array storing the input face-centered fluxes
-//               idx_fc      : Index of accessing g_ConVar_In[]
-//               didx_fc     : Index increment of g_ConVar_In[]
+//               idx_in      : Index of accessing g_ConVar_In[]
+//               didx_in     : Index increment of g_ConVar_In[]
 //               idx_flux    : Index of accessing g_Flux_Half[]
 //               didx_flux   : Index increment of g_Flux_Half[]
 //               dt          : Full time step (source uses 0.5*dt for half-step)
@@ -967,10 +975,10 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
 GPU_DEVICE
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
-                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                            const int idx_fc, const int didx_fc[3],
-                            const int idx_flux, const int didx_flux[3],
-                            const real dt, const real dh, const EoS_t *EoS , const MicroPhy_t *MicroPhy )
+                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
+                            const int idx_in, const int didx_in[3],
+                            const int idx_flux, const int didx_flux[3],   //unuse (both)
+                            const real dt, const real dh, const EoS_t *EoS , const MicroPhy_t *MicroPhy )   //unuse: EoS
 {
 // The flux divergence update for CR_E, CR_F1, CR_F2, CR_F3 is already done
 // in the main Hydro_RiemannPredict loop above where out_con is updated.
@@ -994,21 +1002,15 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    real fc3 = OneCell[CR_F3];
 
 // 2. Get gas density and velocity from conserved variables
-   const real rho = g_ConVar_In[DENS][idx_fc];
-   real v1 = g_ConVar_In[MOMX][idx_fc] / rho;
-   real v2 = g_ConVar_In[MOMY][idx_fc] / rho;
-   real v3 = g_ConVar_In[MOMZ][idx_fc] / rho;
+   const real rho = g_ConVar_In[DENS][idx_in];
+   real v1 = g_ConVar_In[MOMX][idx_in] / rho;
+   real v2 = g_ConVar_In[MOMY][idx_in] / rho;
+   real v3 = g_ConVar_In[MOMZ][idx_in] / rho;
 
-// 3. Get B field (cell-centered)
-#  ifdef MHD
+// 3. Get B field (cell-centered; MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
    const real Bx = OneCell[MAG_OFFSET + MAGX];
    const real By = OneCell[MAG_OFFSET + MAGY];
    const real Bz = OneCell[MAG_OFFSET + MAGZ];
-#  else
-   const real Bx = (real)0.0;
-   const real By = (real)0.0;
-   const real Bz = (real)1.0;   // default B along z
-#  endif
 
 // 4. Compute B-field angles for rotation
    real sint, cost, sinp, cosp;
@@ -1016,10 +1018,10 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 
 // 5. READ sigma_adv and v_adv from stored fields (updated by flux function)
 //    This follows the Python/Athena++ pattern where add_source() READS sigma_adv/v_adv
-   const real sigma_adv_para = g_ConVar_In[ADV_SIGMA][idx_fc];
-   const real v_adv_x = g_ConVar_In[ADV_VX][idx_fc];
-   const real v_adv_y = g_ConVar_In[ADV_VY][idx_fc];
-   const real v_adv_z = g_ConVar_In[ADV_VZ][idx_fc];
+   const real sigma_adv_para = g_ConVar_In[ADV_SIGMA][idx_in];
+   const real v_adv_x = g_ConVar_In[ADV_VX][idx_in];
+   const real v_adv_y = g_ConVar_In[ADV_VY][idx_in];
+   const real v_adv_z = g_ConVar_In[ADV_VZ][idx_in];
    const real sigma_adv_perp = MicroPhy->CR_max_opacity;
    const bool CR_stream      = MicroPhy->CR_stream;      // flag to enable streaming
    const bool CR_Ec_source   = MicroPhy->CR_Ec_source;   // flag to include the CR energy source term
@@ -1050,7 +1052,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    vtot3 = (real)0.0;
 #  endif
 
-// 10. Compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
+// 8. Compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
    const real sigma_diff = MicroPhy->CR_sigma;
    const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
@@ -1063,7 +1065,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
       sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
    }
 
-// 11. Build implicit matrix and solve
+// 9. Build implicit matrix and solve
 //     Source terms:
 //     dEc/dt = -vtot · sigma · (Fc - v*Ec*(4/3)/vmax)
 //     dFc/dt = -vmax · sigma · (Fc - v*Ec*(4/3)/vmax)
@@ -1113,43 +1115,43 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    real newfr2 = ( rhs3 - coef_31 * new_ec ) / coef_33;
    real newfr3 = ( rhs4 - coef_41 * new_ec ) / coef_44;
 
-// 12. Rotate back to lab frame
+// 10. Rotate back to lab frame
 #  ifdef MHD
    InvRotateVec( sint, cost, sinp, cosp, newfr1, newfr2, newfr3 );
 #  endif
 
-// 13. Compute perpendicular heating term (ec_source)
+// 11. Compute perpendicular heating term (ec_source)
 //     This is the work done by perpendicular gas flow: v_perp · grad(Pc)
 //     Note: We need to compute grad(Pc) locally for this term
 #  ifdef MHD
    const real _dh = (real)1.0 / dh;
-   const real dPc_dx = ( g_ConVar_In[CR_E][idx_fc + didx_fc[0]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[0]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dy = ( g_ConVar_In[CR_E][idx_fc + didx_fc[1]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[1]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dz = ( g_ConVar_In[CR_E][idx_fc + didx_fc[2]] - 
-                         g_ConVar_In[CR_E][idx_fc - didx_fc[2]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dx = ( g_ConVar_In[CR_E][idx_in + didx_in[0]] -
+                         g_ConVar_In[CR_E][idx_in - didx_in[0]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dy = ( g_ConVar_In[CR_E][idx_in + didx_in[1]] -
+                         g_ConVar_In[CR_E][idx_in - didx_in[1]] ) * (real)0.5 * _dh / (real)3.0;
+   const real dPc_dz = ( g_ConVar_In[CR_E][idx_in + didx_in[2]] -
+                         g_ConVar_In[CR_E][idx_in - didx_in[2]] ) * (real)0.5 * _dh / (real)3.0;
 
    real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
    RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
 
 // Perpendicular velocity (in B-frame, gas velocity only)
-   real v1_B = g_ConVar_In[MOMX][idx_fc] / rho;
-   real v2_B = g_ConVar_In[MOMY][idx_fc] / rho;
-   real v3_B = g_ConVar_In[MOMZ][idx_fc] / rho;
+   real v1_B = g_ConVar_In[MOMX][idx_in] / rho;
+   real v2_B = g_ConVar_In[MOMY][idx_in] / rho;
+   real v3_B = g_ConVar_In[MOMZ][idx_in] / rho;
    RotateVec( sint, cost, sinp, cosp, v1_B, v2_B, v3_B );
 
    const real ec_source = v2_B * dpcdy_B + v3_B * dpcdz_B;
    if ( CR_Ec_source )   new_ec += dt_source * ec_source;
 #  endif
 
-// 14. Floor CR energy
+// 12. Floor CR energy
    if ( new_ec < TINY_NUMBER )
       new_ec = ec_old;
 
-// 15. No back-reaction to gas at half-step (only at full-step)
+// 13. No back-reaction to gas at half-step (only at full-step)
 
-// 16. Update CR fields
+// 14. Update CR fields
    OneCell[CR_E ] = new_ec;
    OneCell[CR_F1] = newfr1;
    OneCell[CR_F2] = newfr2;
@@ -1185,9 +1187,9 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 GPU_DEVICE
 void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
-                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
-                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy )
+                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
+                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],   //unuse
+                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy )   //unuse: EoS
 {
    const int  didx_out[3]  = { 1, PS2, SQR(PS2) };
    const int  didx_pvar[3] = { 1, N_HF_VAR, SQR(N_HF_VAR) };
@@ -1233,15 +1235,10 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       real v3 = g_PriVar_Half[3][idx_pvar];
 
 //    3. get cell-centered B field from half-step primitive variables
-#     ifdef MHD
+//       (MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
       const real Bx = g_PriVar_Half[MAG_OFFSET+MAGX][idx_pvar];
       const real By = g_PriVar_Half[MAG_OFFSET+MAGY][idx_pvar];
       const real Bz = g_PriVar_Half[MAG_OFFSET+MAGZ][idx_pvar];
-#     else
-      const real Bx = (real)0.0;
-      const real By = (real)0.0;
-      const real Bz = (real)1.0;   // default B along z
-#     endif
 
 //    4. compute B-field angles for rotation
       real sint, cost, sinp, cosp;
@@ -1271,7 +1268,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       const real fc3_old = fc3;
       const real ec_old  = ec;
 
-//    9. rotate all vectors to B-aligned frame
+//    7. rotate all vectors to B-aligned frame
       real fr1 = fc1, fr2 = fc2, fr3 = fc3;
 
 #     ifdef MHD
@@ -1284,7 +1281,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       vtot3 = (real)0.0;
 #     endif
 
-//    10. compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
+//    8. compute effective sigma: combine sigma_diff with sigma_adv only if streaming is enabled
       const real sigma_diff = MicroPhy->CR_sigma;
       const real sigma_diff_perp = MicroPhy->CR_sigma_perp;
 
@@ -1297,7 +1294,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          sigma_z = (real)1.0 / ( (real)1.0/sigma_diff_perp + (real)1.0/sigma_adv_perp );
       }
 
-//    11. build implicit matrix and solve
+//    9. build implicit matrix and solve
 //        Source terms:
 //        dEc/dt = -vtot · sigma · (Fc - v*Ec*(4/3)/vmax)
 //        dFc/dt = -vmax · sigma · (Fc - v*Ec*(4/3)/vmax)
@@ -1352,12 +1349,12 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       real newfr2 = ( rhs3 - coef_31 * new_ec ) / coef_33;
       real newfr3 = ( rhs4 - coef_41 * new_ec ) / coef_44;
 
-//    12. rotate back to lab frame
+//    10. rotate back to lab frame
 #     ifdef MHD
       InvRotateVec( sint, cost, sinp, cosp, newfr1, newfr2, newfr3 );
 #     endif
 
-//    13. compute perpendicular heating term (ec_source)
+//    11. compute perpendicular heating term (ec_source)
 //        This is the work done by perpendicular gas flow: v_perp · grad(Pc)
 //        In B-aligned frame: v_perp = (0, v2, v3), grad_pc_perp = (0, dPc/dy', dPc/dz')
 //        Note: We need to compute grad(Pc) locally for this term
@@ -1384,11 +1381,11 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       if ( CR_Ec_source )   new_ec += dt * ec_source;
 #     endif
 
-//    14. floor CR energy
+//    12. floor CR energy
       if ( new_ec < TINY_NUMBER )
          new_ec = ec_old;
 
-//    15. apply back-reaction to gas momentum and energy
+//    13. apply back-reaction to gas momentum and energy
       if ( CR_source ) {
 //       momentum change: delta_p = -(new_Fc - old_Fc) / vmax
          g_Output[MOMX][idx_out] += -( newfr1 - fc1_old ) * invlim;
@@ -1403,7 +1400,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
          g_Output[ENGY][idx_out] = new_eg;
       }
 
-//    16. update CR fields
+//    14. update CR fields
       g_Output[CR_E ][idx_out] = new_ec;
       g_Output[CR_F1][idx_out] = newfr1;
       g_Output[CR_F2][idx_out] = newfr2;

@@ -323,6 +323,14 @@
 # endif
 
 # ifdef CR_STREAMING
+// two-moment cosmic-ray fields (Jiang & Oh 2018):
+//    CR_E      : CR energy density Ec
+//    CR_F1/2/3 : REDUCED CR energy flux Fc/CR_VMAX (same convention as Athena++'s u_cr(1:3));
+//                multiply by CR_VMAX to get the physical flux
+//    ADV_SIGMA : streaming opacity sigma_adv (parallel to B)
+//    ADV_VX/Y/Z: streaming velocity v_adv
+//    --> ADV_* are evolving work arrays updated by CR_UpdateStreaming()/CR_UpdateOpacity(),
+//        not physical passive scalars
 #  define CR_E                ( PASSIVE_NEXT_IDX2 )
 #  define CR_F1               ( CR_E - 1          )
 #  define CR_F2               ( CR_F1 - 1         )

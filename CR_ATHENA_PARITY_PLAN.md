@@ -18,7 +18,7 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 | B3 | Missing gas back-reaction at half step | Easy–Moderate | Live gas + CR_SOURCE=1 | **FIXED 2026-07-09** |
 | B4 | ec_source: central-diff vs flux-divergence grad(Pc) | Moderate | Multi-D, moving gas, oblique B | **FIXED 2026-07-09** (full 9-term form; see B9) |
 | B9 | grad(Pc) diagonal-only vs Athena's full 9-term flux divergence (new finding 2026-07-09) | Easy (mechanical) | Multi-D / oblique B with streaming | **FIXED 2026-07-09** (see Tier 2 item 9) |
-| B5 | Half-step source uses half-step B vs Athena t^n B | Moderate (buffer aliasing) | Evolving B only | FIX-LATER (bundle 2) |
+| B5 | Half-step source uses half-step B vs Athena t^n B | Moderate (buffer aliasing) | Evolving B only | **FIXED 2026-07-10** (recompute t^n B from face-centered input) |
 | B6 | Floor vs gas-energy update ordering in source | Trivial | Only when source drives Ec<0 with CR_SOURCE=1 | Decide with boss (match = trivial; GAMER's version conserves energy better) |
 | B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | Guard now, document retry |
 | B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **FIXED 2026-07-10** (FLU_GHOST_SIZE +1; ACCEPT overridden) |
@@ -172,6 +172,21 @@ is to do them — they are small and the data is already available in the kernel
    read t^n B from it mid-loop — recompute from `g_Mag_Array_In` faces or add a small buffer.
    Only worth it if evolving-B runs must match; otherwise document as a truncation-order
    difference (zero for static B).
+   **FIXED 2026-07-10** (compile-verified, not run-validated) via the "recompute from
+   `g_Mag_Array_In`" option: `Hydro_RiemannPredict()` gains a `g_FC_B_In` parameter (the t^n
+   face-centered B, `g_Mag_Array_In[P]`) and recomputes the t^n cell-centered B per cell with
+   `MHD_GetCellCenteredBField()` — bitwise identical to the t^n B used by the half-step
+   fluxes (same array, same averaging, same indices). `CR_TwoMomentSource_HalfStep()` takes
+   the result as a new `B_n[]` parameter and uses it for the rotation angles instead of
+   `OneCell[MAG_OFFSET+*]`; a single set of angles feeds the implicit solve AND both
+   ec_source rotations, so the one switched read fixes all B consumers at once (matching
+   Athena, where stage 1 uses t^n `b_angle` everywhere). The full-step source keeps the
+   half-step B (= Athena's stage-2 bcc, already correct). The buffer-aliasing risk was fully
+   sidestepped: `g_Mag_Array_In` is a read-only (`const`) kernel argument that nothing in the
+   kernel writes, so the fix needs no new global/shared memory, no extra `__syncthreads()`,
+   and no kernel-signature/CUAPI changes (~6 extra global loads per cell). Compile-verified
+   with cpu_CR_Streaming, cpu_CR_Classic_Diffusion (non-CR_STREAMING path, signature change
+   only), and other_tests/gpu_CR_Streaming_x (GPU + COSMIC_RAY + CR_STREAMING combined).
 
 10. **B6 (floor/heating order)** — Trivial to reorder to Athena's sequence (gas energy sees
     the *unfloored* new_ec, floor threshold 0.0, floor after energy update). Note this

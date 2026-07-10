@@ -1000,12 +1000,18 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
 //                  half-step fluxes (matching Athena++'s grad_pc_), with the gas velocity read from the
 //                  t^n state (g_ConVar_In): Athena++ evaluates ec_source_ in CalculateFluxes() from the
 //                  PRE-stage w, while the implicit solve uses the stage-updated u
+//               7. The rotation angles use the t^n cell-centered B field (B_n[], recomputed by the
+//                  caller from the t^n face-centered B), NOT the CT-half-step B in OneCell[MAG_OFFSET+*]:
+//                  Athena++'s stage-1 source and ec_source use b_angle computed from the t^n bcc (set by
+//                  the previous step's CRTC_OPACITY); the full-step source instead uses the half-step B
+//                  (Athena++'s stage-2 bcc)
 //
 // Reference   : Athena++ cr_source.cpp, cr_transport.cpp, time_integrator.cpp
 //
 // Parameter   : OneCell     : Single-cell fluid array (already updated with flux divergence)
 //               g_ConVar_In : Array storing the input cell-centered conserved variables
 //               g_Flux_Half : Array storing the input face-centered fluxes
+//               B_n         : t^n cell-centered B field [3] (see Note 7)
 //               idx_in      : Index of accessing g_ConVar_In[]
 //               didx_in     : Index increment of g_ConVar_In[]
 //               idx_flux    : Index of accessing g_Flux_Half[]
@@ -1021,6 +1027,7 @@ GPU_DEVICE
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
                             const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                            const real B_n[],
                             const int idx_in, const int didx_in[3],   //unuse: didx_in
                             const int idx_flux, const int didx_flux[3],
                             const real dt, const real dh, const EoS_t *EoS , const MicroPhy_t *MicroPhy )   //unuse: EoS
@@ -1056,10 +1063,12 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    real v2 = OneCell[MOMY] / rho;
    real v3 = OneCell[MOMZ] / rho;
 
-// 3. Get B field (cell-centered; MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
-   const real Bx = OneCell[MAG_OFFSET + MAGX];
-   const real By = OneCell[MAG_OFFSET + MAGY];
-   const real Bz = OneCell[MAG_OFFSET + MAGZ];
+// 3. Get B field: t^n cell-centered B passed in by the caller, matching Athena++'s stage-1 b_angle
+//    computed from the t^n bcc — NOT the CT-half-step-updated OneCell[MAG_OFFSET+*] (see Note 7)
+//    (MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
+   const real Bx = B_n[MAGX];
+   const real By = B_n[MAGY];
+   const real Bz = B_n[MAGZ];
 
 // 4. Compute B-field angles for rotation
    real sint, cost, sinp, cosp;

@@ -14,9 +14,10 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 | B1 | TINY_NUMBER: DBL_MIN vs 1e-20 | Easy | Always (incl. current static tests) | **FIX first** |
 | C1 | `va<=TINY` fallback + extra `Ec>TINY` guard | Easy | Edge cells (floored Ec, B~0) | **FIX with B1** |
 | B7a | ADV_* passive-advection fluxes (HLLE skip commented out) | Easy | Always (stored fields, patch edges) | **FIX second** |
-| B2 | Gas state fed to source solve (t^n / half-step vs stage-updated) | Easy–Moderate | Live gas only (CR_SOURCE=1 or moving gas) | FIX-LATER (bundle 1) |
-| B3 | Missing gas back-reaction at half step | Easy–Moderate | Live gas + CR_SOURCE=1 | FIX-LATER (bundle 1) |
-| B4 | ec_source: central-diff vs flux-divergence grad(Pc) | Moderate | Multi-D, moving gas, oblique B | FIX-LATER (bundle 1) |
+| B2 | Gas state fed to source solve (t^n / half-step vs stage-updated) | Easy–Moderate | Live gas only (CR_SOURCE=1 or moving gas) | **FIXED 2026-07-09** |
+| B3 | Missing gas back-reaction at half step | Easy–Moderate | Live gas + CR_SOURCE=1 | **FIXED 2026-07-09** |
+| B4 | ec_source: central-diff vs flux-divergence grad(Pc) | Moderate | Multi-D, moving gas, oblique B | **FIXED 2026-07-09** (full 9-term form; see B9) |
+| B9 | grad(Pc) diagonal-only vs Athena's full 9-term flux divergence (new finding 2026-07-09) | Easy (mechanical) | Multi-D / oblique B with streaming | **FIXED 2026-07-09** (see Tier 2 item 9) |
 | B5 | Half-step source uses half-step B vs Athena t^n B | Moderate (buffer aliasing) | Evolving B only | FIX-LATER (bundle 2) |
 | B6 | Floor vs gas-energy update ordering in source | Trivial | Only when source drives Ec<0 with CR_SOURCE=1 | Decide with boss (match = trivial; GAMER's version conserves energy better) |
 | B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | Guard now, document retry |
@@ -56,6 +57,10 @@ tighten and patch-edge noise should drop.
 
 ### Tier 2 — "coupled-parity bundle 1" (needed only for live-gas matching)
 
+**STATUS: DONE 2026-07-09** (all three, in `CPU_CR_TwoMoment.cpp` only; no signature changes,
+GPU covered via the `.cu` symlink; compile-verified with the cpu_CR_Streaming config; not yet
+validated by a live-gas comparison run — see Verification strategy).
+
 Do these together; they all live in the two source functions and only show up when the gas
 moves or CR_SOURCE=1. Since I don't know which science runs are planned, the safe default
 is to do them — they are small and the data is already available in the kernel:
@@ -63,12 +68,45 @@ is to do them — they are small and the data is already available in the kernel
 6. **B2 (gas state)** — Read rho/momentum from the stage-updated state (`out_con` at half
    step, `g_Output` at full step) instead of `g_ConVar_In` / `g_PriVar_Half`, matching
    Athena's use of post-transport `u`. Localized swap of the read source.
+   **DONE 2026-07-09.** Implementation notes: rho is guarded with `FMAX(rho, TINY_NUMBER)`
+   because both stage-updated states are density-unfloored at the point of the source call
+   (half step: floor applied after the source in `Hydro_RiemannPredict()`; full step:
+   `Hydro_FullStepUpdate()` defers flooring to `Flu_Close()`). Athena instead applies its EoS
+   density floor *inside* the source (`cr_source.cpp: rho = max(rho, rho_floor)`), so cells
+   where either floor triggers will not match — this ties into the still-open B6 decision.
+   The ec_source velocities deliberately KEEP the pre-stage state (`g_ConVar_In` at half step,
+   `g_PriVar_Half` at full step): Athena evaluates `ec_source_` in `CalculateFluxes()` from
+   the pre-stage `w` while the implicit solve uses stage-updated `u`.
 7. **B3 (half-step back-reaction)** — Replicate the full-step back-reaction block in the
    half-step source (momentum + energy on `out_con`, with the 0.5*dt source), matching
    Athena's stage-agnostic `AddSourceTerms`.
+   **DONE 2026-07-09.** Mirrors GAMER's full-step ordering (floor new_ec first, then kick the
+   gas), which deviates from Athena's order — that ordering question remains item B6. The
+   kicked half-step gas then feeds the MinEint floor, Con2Pri, and the full-step
+   reconstruction, matching Athena's stage-1 flow.
 8. **B4 (ec_source operator)** — Build grad(Pc) from the CR flux divergence (the source
    functions already receive `g_Flux*`; the index arithmetic already exists in
    `CR_UpdateStreaming`) instead of central differences of Ec. Moderate but mechanical.
+   **DONE 2026-07-09**, using the full 9-term discretization (see item 9 / B9). Half step
+   uses the previously-unused `idx_flux`/`didx_flux` arguments on `g_Flux_Half`; full step
+   computes the flux index internally (`i_out+1` mapping, identical to
+   `Hydro_FullStepUpdate()` with MHD).
+9. **B9 (grad(Pc): full 9-term flux divergence)** — New finding during the Tier-2 work
+   (2026-07-09): Athena's `grad_pc_(n)` is the FULL divergence of the flux vector of the
+   CRF(n+1) equation — it sums the flux differences of ALL THREE directions per component
+   (9 terms total; note the `+=` in the nx2>1/nx3>1 blocks of `cr_transport.cpp:366-403`),
+   and the transverse fluxes are generically nonzero through the HLLE upwind/dissipation
+   terms (`-bm*Fc_L`, `-bp*Fc_R`) even though the off-diagonal Eddington factors vanish.
+   Athena feeds the SAME `grad_pc_` array to both `DefaultStreaming` (sigma_adv/v_adv via
+   `b_grad_pc = B·grad_pc`) and `ec_source_`, so both consumers need all 9 terms. GAMER's
+   `CR_UpdateStreaming` had kept only the 3 diagonal terms — zero effect for the 1D
+   axis-aligned suites (transverse fluxes uniform), but breaks machine-precision parity in
+   multi-D / oblique-B streaming (possibly part of the circle test's 2.9e-4 residual).
+   **DONE 2026-07-09** (initially deferred pending verification of the Athena source, then
+   confirmed — the x2/x3 accumulations are easy to misread — and fixed the same day):
+   `CR_UpdateStreaming` and BOTH ec_source blocks now compute the full 9-term divergence.
+   All required transverse fluxes were verified to be computed and in range at every call
+   site (no ghost widening, no new GPU syncs).
 
 ### Tier 3 — "coupled-parity bundle 2" (evolving-B parity)
 
@@ -121,3 +159,12 @@ is to do them — they are small and the data is already available in the kernel
 - Tier 2/3 cannot be validated by the current suites (they are static-gas by design).
   Before claiming coupled parity, add at least one step-aligned live-gas comparison
   (e.g. the paper shock test with CR_SOURCE=1, fixed-step dumping on both codes).
+- Tier-2 landing note (2026-07-09): Tier 2 (+ B9) was implemented BEFORE Tier 1 (user
+  request) and is compile-verified only. For exactly static gas (v=0, zero mass/momentum
+  fluxes), B2/B3/B4 are mathematical no-ops: B2's rho/v feed only v-dependent terms, B3 is
+  gated by CR_SOURCE, and B4's new gradient is multiplied by v_perp. B9 is NOT a static
+  no-op in multi-D: the 9-term grad_pc changes sigma_adv/v_adv wherever transverse CR fluxes
+  vary (e.g. the circle test — residuals expected to shift, presumably toward Athena);
+  1D axis-aligned suites are unaffected. Runs with live gas or CR_SOURCE=1 (e.g. the
+  paper-shock 4.2.2 reproduction) WILL shift at O(dt) — rerun before comparing against
+  archived results.

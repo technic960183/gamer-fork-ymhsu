@@ -200,7 +200,9 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
 //
 // Note        : 1. This function loops over interior cells and calls CR_UpdateStreaming_OneCell for each
 //               2. Works for both half-step and full-step by using appropriate parameters
-//               3. grad_pc is computed from flux divergence: grad_pc[n] = (F[n,i+1/2] - F[n,i-1/2]) / dx / vmax
+//               3. grad_pc[n] is the FULL flux divergence of the CR_F(n+1) equation, summing all
+//                  three flux directions (9 terms total): grad_pc[n] = sum_d (F[d][CR_F(n+1),d+1/2]
+//                  - F[d][CR_F(n+1),d-1/2]) / dx / vmax, matching Athena++'s grad_pc_
 //               4. Based on Athena++ DefaultStreaming() - called AFTER flux calculation
 //
 // Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
@@ -231,6 +233,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
    const real vmax = MicroPhy->CR_vmax;
    const real _dh  = (real)1.0 / dh;
    const int  cell_offset = 1;  // skip boundary cells
+   const int  didx_flux[3] = { 1, NFlux, SQR(NFlux) };
+   const int  CRF_v[3] = { CR_F1, CR_F2, CR_F3 };
 
 // determine input array: use g_CellVar if provided, else g_Output
    const real (*g_Input)[CUBE(FLU_NXT)] = ( g_CellVar != NULL ) ? g_CellVar : g_Output;
@@ -265,10 +269,17 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
       const int idx_B = IDX321( i_in, j_in, k_in, NVar_B, NVar_B );
 
 //    compute grad_pc from flux divergence
+//    --> matching Athena++ (cr_transport.cpp:366-403), each component n is the FULL divergence of
+//        the flux vector of the CR_F(n+1) equation, summing all three flux directions; the
+//        transverse fluxes carry nonzero HLLE upwind/dissipation terms (-bm*Fc_L, -bp*Fc_R) even
+//        though the off-diagonal Eddington factors vanish, so they must not be dropped
       real grad_pc[3];
-      grad_pc[0] = ( g_Flux[0][CR_F1][idx_flux] - g_Flux[0][CR_F1][idx_flux - 1] ) * _dh / vmax;
-      grad_pc[1] = ( g_Flux[1][CR_F2][idx_flux] - g_Flux[1][CR_F2][idx_flux - NFlux] ) * _dh / vmax;
-      grad_pc[2] = ( g_Flux[2][CR_F3][idx_flux] - g_Flux[2][CR_F3][idx_flux - SQR(NFlux)] ) * _dh / vmax;
+      for (int n=0; n<3; n++) {
+         grad_pc[n] = (real)0.0;
+         for (int d=0; d<3; d++)
+            grad_pc[n] += g_Flux[d][ CRF_v[n] ][idx_flux] - g_Flux[d][ CRF_v[n] ][ idx_flux - didx_flux[d] ];
+         grad_pc[n] *= _dh / vmax;
+      }
 
 //    get cell-centered values for updating opacity
       const real Ec  = g_Input[CR_E ][idx_in];
@@ -954,9 +965,18 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
 // Note        : 1. The main flux divergence is already applied in the Hydro_RiemannPredict loop
 //               2. This function applies the implicit source term solve at half-step with dt_source = 0.5*dt
 //               3. Athena++ applies source terms at BOTH half-step and full-step for VL2 integrator
-//               4. No back-reaction to gas at half-step (only at full-step)
+//               4. Gas state (rho, momentum) is read from the stage-updated OneCell[] (i.e. after the
+//                  half-step flux divergence), matching Athena++'s use of the post-transport u in
+//                  AddSourceTerms() at every stage
+//               5. Back-reaction to gas momentum/energy is applied here as well (when CR_SOURCE is on),
+//                  matching Athena++'s stage-agnostic AddSourceTerms(); the kicked half-step gas state
+//                  then feeds the full-step reconstruction and the full-step source
+//               6. The ec_source heating term uses grad(Pc) built from the CR flux divergence of the
+//                  half-step fluxes (matching Athena++'s grad_pc_), with the gas velocity read from the
+//                  t^n state (g_ConVar_In): Athena++ evaluates ec_source_ in CalculateFluxes() from the
+//                  PRE-stage w, while the implicit solve uses the stage-updated u
 //
-// Reference   : Athena++ cr_source.cpp, time_integrator.cpp
+// Reference   : Athena++ cr_source.cpp, cr_transport.cpp, time_integrator.cpp
 //
 // Parameter   : OneCell     : Single-cell fluid array (already updated with flux divergence)
 //               g_ConVar_In : Array storing the input cell-centered conserved variables
@@ -970,14 +990,14 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
 //               EoS         : EoS object
 //               MicroPhy    : Microphysics object
 //
-// Return      : OneCell[] (modified CR fields)
+// Return      : OneCell[] (modified CR and gas fields)
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
-                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
-                            const int idx_in, const int didx_in[3],
-                            const int idx_flux, const int didx_flux[3],   //unuse (both)
+                            const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                            const int idx_in, const int didx_in[3],   //unuse: didx_in
+                            const int idx_flux, const int didx_flux[3],
                             const real dt, const real dh, const EoS_t *EoS , const MicroPhy_t *MicroPhy )   //unuse: EoS
 {
 // The flux divergence update for CR_E, CR_F1, CR_F2, CR_F3 is already done
@@ -1001,11 +1021,15 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    real fc2 = OneCell[CR_F2];
    real fc3 = OneCell[CR_F3];
 
-// 2. Get gas density and velocity from conserved variables
-   const real rho = g_ConVar_In[DENS][idx_in];
-   real v1 = g_ConVar_In[MOMX][idx_in] / rho;
-   real v2 = g_ConVar_In[MOMY][idx_in] / rho;
-   real v3 = g_ConVar_In[MOMZ][idx_in] / rho;
+// 2. Get gas density and velocity from the STAGE-UPDATED conserved variables (OneCell already has
+//    the half-step flux divergence applied), matching Athena++'s post-transport u in AddSourceTerms()
+//    --> guard rho with TINY_NUMBER since the density floor is applied only AFTER this function;
+//        note Athena++ instead applies its EoS density floor here (cr_source.cpp), so floored
+//        cells will not match
+   const real rho = FMAX( OneCell[DENS], TINY_NUMBER );
+   real v1 = OneCell[MOMX] / rho;
+   real v2 = OneCell[MOMY] / rho;
+   real v3 = OneCell[MOMZ] / rho;
 
 // 3. Get B field (cell-centered; MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
    const real Bx = OneCell[MAG_OFFSET + MAGX];
@@ -1023,6 +1047,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    const real v_adv_y = g_ConVar_In[ADV_VY][idx_in];
    const real v_adv_z = g_ConVar_In[ADV_VZ][idx_in];
    const real sigma_adv_perp = MicroPhy->CR_max_opacity;
+   const bool CR_source      = MicroPhy->CR_source;      // flag to enable back-reaction to gas
    const bool CR_stream      = MicroPhy->CR_stream;      // flag to enable streaming
    const bool CR_Ec_source   = MicroPhy->CR_Ec_source;   // flag to include the CR energy source term
 
@@ -1036,8 +1061,11 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
       vtot3 += v_adv_z;
    }
 
-// 6. Save original CR energy for floor check
-   const real ec_old = ec;
+// 6. Save original CR energy and flux for the floor check and gas back-reaction
+   const real ec_old  = ec;
+   const real fc1_old = fc1;
+   const real fc2_old = fc2;
+   const real fc3_old = fc3;
 
 // 7. Rotate all vectors to B-aligned frame
    real fr1 = fc1, fr2 = fc2, fr3 = fc3;
@@ -1122,23 +1150,31 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 
 // 11. Compute perpendicular heating term (ec_source)
 //     This is the work done by perpendicular gas flow: v_perp · grad(Pc)
-//     Note: We need to compute grad(Pc) locally for this term
+//     grad(Pc) is built from the CR flux divergence of the half-step fluxes (same discretization
+//     as CR_UpdateStreaming()), matching Athena++'s grad_pc_ used for ec_source_ (cr_transport.cpp):
+//     each component n is the FULL divergence of the flux vector of the CR_F(n+1) equation,
+//     summing all three flux directions (9 terms total)
 #  ifdef MHD
    const real _dh = (real)1.0 / dh;
-   const real dPc_dx = ( g_ConVar_In[CR_E][idx_in + didx_in[0]] -
-                         g_ConVar_In[CR_E][idx_in - didx_in[0]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dy = ( g_ConVar_In[CR_E][idx_in + didx_in[1]] -
-                         g_ConVar_In[CR_E][idx_in - didx_in[1]] ) * (real)0.5 * _dh / (real)3.0;
-   const real dPc_dz = ( g_ConVar_In[CR_E][idx_in + didx_in[2]] -
-                         g_ConVar_In[CR_E][idx_in - didx_in[2]] ) * (real)0.5 * _dh / (real)3.0;
+   const int  CRF_v[3] = { CR_F1, CR_F2, CR_F3 };  // CR_F* field indices DESCEND, hence the explicit list
+   real grad_pc[3];
+   for (int n=0; n<3; n++) {
+      grad_pc[n] = (real)0.0;
+      for (int d=0; d<3; d++)
+         grad_pc[n] += g_Flux_Half[d][ CRF_v[n] ][idx_flux] - g_Flux_Half[d][ CRF_v[n] ][ idx_flux - didx_flux[d] ];
+      grad_pc[n] *= _dh * invlim;
+   }
 
-   real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
+   real dpcdx_B = grad_pc[0], dpcdy_B = grad_pc[1], dpcdz_B = grad_pc[2];
    RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
 
 // Perpendicular velocity (in B-frame, gas velocity only)
-   real v1_B = g_ConVar_In[MOMX][idx_in] / rho;
-   real v2_B = g_ConVar_In[MOMY][idx_in] / rho;
-   real v3_B = g_ConVar_In[MOMZ][idx_in] / rho;
+// --> deliberately read from the t^n state: Athena++ evaluates ec_source_ in CalculateFluxes()
+//     from the PRE-stage w, while the implicit solve above uses the stage-updated state
+   const real rho_n = g_ConVar_In[DENS][idx_in];
+   real v1_B = g_ConVar_In[MOMX][idx_in] / rho_n;
+   real v2_B = g_ConVar_In[MOMY][idx_in] / rho_n;
+   real v3_B = g_ConVar_In[MOMZ][idx_in] / rho_n;
    RotateVec( sint, cost, sinp, cosp, v1_B, v2_B, v3_B );
 
    const real ec_source = v2_B * dpcdy_B + v3_B * dpcdz_B;
@@ -1149,7 +1185,22 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    if ( new_ec < TINY_NUMBER )
       new_ec = ec_old;
 
-// 13. No back-reaction to gas at half-step (only at full-step)
+// 13. Apply back-reaction to gas momentum and energy, matching Athena++'s stage-agnostic
+//     AddSourceTerms(); the kicked half-step gas state feeds the full-step reconstruction
+//     (the effective source dt is already contained in newfr*/new_ec via dt_source)
+   if ( CR_source ) {
+//    momentum change: delta_p = -(new_Fc - old_Fc) / vmax
+      OneCell[MOMX] += -( newfr1 - fc1_old ) * invlim;
+      OneCell[MOMY] += -( newfr2 - fc2_old ) * invlim;
+      OneCell[MOMZ] += -( newfr3 - fc3_old ) * invlim;
+
+//    energy change: delta_E = -(new_Ec - old_Ec)
+//    (CR energy lost goes to gas thermal energy)
+      real new_eg = OneCell[ENGY] - ( new_ec - ec_old );
+      if ( new_eg < (real)0.0 )
+         new_eg = OneCell[ENGY];
+      OneCell[ENGY] = new_eg;
+   }
 
 // 14. Update CR fields
    OneCell[CR_E ] = new_ec;
@@ -1169,9 +1220,18 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 // Note        : 1. Solves the coupled source terms for Ec and Fc implicitly
 //               2. Includes rotation to B-aligned frame for anisotropic transport
 //               3. Applies back-reaction to gas momentum and energy if CR_source is enabled
-//               4. Based on Athena++ cr_source.cpp
+//               4. Gas state (rho, momentum) is read from the stage-updated g_Output[] (i.e. after the
+//                  full-step flux divergence in Hydro_FullStepUpdate()), matching Athena++'s use of the
+//                  post-transport u in AddSourceTerms() at every stage; B field and sigma_adv/v_adv are
+//                  still read from the half-step g_PriVar_Half[], matching Athena++'s stage-2 bcc
+//               5. The ec_source heating term uses grad(Pc) built from the CR flux divergence of the
+//                  full-step fluxes (matching Athena++'s grad_pc_), with the gas velocity read from the
+//                  half-step primitives (g_PriVar_Half): Athena++ evaluates ec_source_ in
+//                  CalculateFluxes() from the PRE-stage w, while the implicit solve uses the
+//                  stage-updated u
+//               6. Based on Athena++ cr_source.cpp
 //
-// Reference   : Athena++ cr_source.cpp
+// Reference   : Athena++ cr_source.cpp, cr_transport.cpp
 //
 // Parameter   : g_PriVar_Half : Array storing the input cell-centered primitive variables
 //               g_Output      : Array to store the updated fluid data (already has flux divergence applied)
@@ -1187,12 +1247,11 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 GPU_DEVICE
 void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
-                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
+                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                                 const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],   //unuse
                                 const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy )   //unuse: EoS
 {
-   const int  didx_out[3]  = { 1, PS2, SQR(PS2) };
-   const int  didx_pvar[3] = { 1, N_HF_VAR, SQR(N_HF_VAR) };
+   const int  didx_flux[3] = { 1, N_FL_FLUX, SQR(N_FL_FLUX) };
 
 // offset between output array and primitive array
    const int  pvar_offset  = ( N_HF_VAR - PS2 ) / 2;
@@ -1227,12 +1286,16 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       real fc2 = g_Output[CR_F2][idx_out];
       real fc3 = g_Output[CR_F3][idx_out];
 
-//    2. get gas density and velocity from half-step primitive variables
-//       Note: primitive array layout is [DENS=0, VelX=1, VelY=2, VelZ=3, ...]
-      const real rho = g_PriVar_Half[DENS][idx_pvar];
-      real v1 = g_PriVar_Half[1][idx_pvar];
-      real v2 = g_PriVar_Half[2][idx_pvar];
-      real v3 = g_PriVar_Half[3][idx_pvar];
+//    2. get gas density and velocity from the STAGE-UPDATED conserved variables (g_Output already
+//       has the full-step flux divergence applied), matching Athena++'s post-transport u in
+//       AddSourceTerms()
+//       --> guard rho with TINY_NUMBER since Hydro_FullStepUpdate() deliberately does not floor
+//           the density (deferred to Flu_Close()); note Athena++ instead applies its EoS density
+//           floor here (cr_source.cpp), so floored cells will not match
+      const real rho = FMAX( g_Output[DENS][idx_out], TINY_NUMBER );
+      real v1 = g_Output[MOMX][idx_out] / rho;
+      real v2 = g_Output[MOMY][idx_out] / rho;
+      real v3 = g_Output[MOMZ][idx_out] / rho;
 
 //    3. get cell-centered B field from half-step primitive variables
 //       (MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
@@ -1357,21 +1420,35 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 //    11. compute perpendicular heating term (ec_source)
 //        This is the work done by perpendicular gas flow: v_perp · grad(Pc)
 //        In B-aligned frame: v_perp = (0, v2, v3), grad_pc_perp = (0, dPc/dy', dPc/dz')
-//        Note: We need to compute grad(Pc) locally for this term
+//        grad(Pc) is built from the CR flux divergence of the full-step fluxes (same
+//        discretization as CR_UpdateStreaming()), matching Athena++'s grad_pc_ used for
+//        ec_source_ (cr_transport.cpp): each component n is the FULL divergence of the flux
+//        vector of the CR_F(n+1) equation, summing all three flux directions (9 terms total)
 #     ifdef MHD
       const real _dh = (real)1.0 / dh;
-      const real dPc_dx = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[0]] - 
-                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[0]] ) * (real)0.5 * _dh / (real)3.0;
-      const real dPc_dy = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[1]] - 
-                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[1]] ) * (real)0.5 * _dh / (real)3.0;
-      const real dPc_dz = ( g_PriVar_Half[CR_E][idx_pvar + didx_pvar[2]] - 
-                            g_PriVar_Half[CR_E][idx_pvar - didx_pvar[2]] ) * (real)0.5 * _dh / (real)3.0;
 
-      real dpcdx_B = dPc_dx, dpcdy_B = dPc_dy, dpcdz_B = dPc_dz;
+//    flux index: one flux ring is skipped along each transverse direction for the CT electric
+//    field, hence the +1 offset (same mapping as Hydro_FullStepUpdate() with MHD, which is
+//    compile-enforced for CR_STREAMING)
+      const int idx_flux = IDX321( i_out+1, j_out+1, k_out+1, N_FL_FLUX, N_FL_FLUX );
+
+      const int CRF_v[3] = { CR_F1, CR_F2, CR_F3 };  // CR_F* field indices DESCEND, hence the explicit list
+      real grad_pc[3];
+      for (int n=0; n<3; n++) {
+         grad_pc[n] = (real)0.0;
+         for (int d=0; d<3; d++)
+            grad_pc[n] += g_Flux[d][ CRF_v[n] ][idx_flux] - g_Flux[d][ CRF_v[n] ][ idx_flux - didx_flux[d] ];
+         grad_pc[n] *= _dh * invlim;
+      }
+
+      real dpcdx_B = grad_pc[0], dpcdy_B = grad_pc[1], dpcdz_B = grad_pc[2];
       RotateVec( sint, cost, sinp, cosp, dpcdx_B, dpcdy_B, dpcdz_B );
 
 //    perpendicular velocity (in B-frame, gas velocity only)
 //    Note: primitive array layout is [DENS=0, VelX=1, VelY=2, VelZ=3, ...]
+//    --> deliberately read from the half-step primitives: Athena++ evaluates ec_source_ in
+//        CalculateFluxes() from the PRE-stage w, while the implicit solve above uses the
+//        stage-updated state
       real v1_B = g_PriVar_Half[1][idx_pvar];
       real v2_B = g_PriVar_Half[2][idx_pvar];
       real v3_B = g_PriVar_Half[3][idx_pvar];

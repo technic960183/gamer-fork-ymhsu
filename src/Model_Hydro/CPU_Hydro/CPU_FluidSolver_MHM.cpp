@@ -640,7 +640,10 @@ void CPU_FluidSolver_MHM(
 #           if ( FLU_SCHEME == MHM )
             const int OffsetPri = 0;
 #           else
-            const int OffsetPri = LR_GHOST_SIZE;
+//          offset between the flux/electric-field indices and g_PriVar_Half[];
+//          equals LR_GHOST_SIZE unless g_PriVar_Half[] carries extra ghost layers
+//          (currently only CR_STREAMING, which widens FLU_GHOST_SIZE by one --> see Macro.h)
+            const int OffsetPri = ( N_HF_VAR - N_FC_VAR ) / 2;
 #           endif
 
             MHD_ComputeElectric( g_EC_Ele_1PG, g_FC_Flux_1PG, g_PriVar_Half_1PG, N_FL_ELE, N_FL_FLUX,

@@ -1124,9 +1124,12 @@ void Aux_Check_Parameter()
       Aux_Error( ERROR_INFO, "please set \"%s\" for \"%s\" !!\n",
                  "FLU_GHOST_SIZE = 3", "MHM_RP scheme + PLM reconstruction + non-EXTPRE limiter" );
 
+// CR_STREAMING deliberately widens FLU_GHOST_SIZE by one (see Macro.h)
+#  ifndef CR_STREAMING
    if ( OPT__LR_LIMITER != LR_LIMITER_EXTPRE  &&  FLU_GHOST_SIZE > 3  &&  MPI_Rank == 0 )
       Aux_Message( stderr, "WARNING : please set \"%s\" in \"%s\" for higher performance !!\n",
                    "FLU_GHOST_SIZE = 3", "MHM_RP scheme + PLM reconstruction + non-EXTPRE limiter" );
+#  endif
 #  endif // #if ( LR_SCHEME == PLM )
 
 #  if ( LR_SCHEME == PPM )
@@ -1134,9 +1137,12 @@ void Aux_Check_Parameter()
       Aux_Error( ERROR_INFO, "please set \"%s\" for \"%s\" !!\n",
                  "FLU_GHOST_SIZE = 4", "MHM_RP scheme + PPM reconstruction + non-EXTPRE limiter" );
 
+// CR_STREAMING deliberately widens FLU_GHOST_SIZE by one (see Macro.h)
+#  ifndef CR_STREAMING
    if ( FLU_GHOST_SIZE > 4  &&  MPI_Rank == 0 )
       Aux_Message( stderr, "WARNING : please set \"%s\" in \"%s\" for higher performance !!\n",
                    "FLU_GHOST_SIZE = 4", "MHM_RP scheme + PPM reconstruction + non-EXTPRE limiter" );
+#  endif
 #  endif // #if ( LR_SCHEME == PPM )
 
 #  endif // #if ( FLU_SCHEME == MHM_RP )
@@ -1948,6 +1954,17 @@ void Aux_Check_Parameter()
 #  ifdef DUAL_ENERGY
 #     error : ERROR : DUAL_ENERGY is not supported for CR_STREAMING !!
 #  endif
+
+// CR_STREAMING widens FLU_GHOST_SIZE by one so that the outermost ADV_* ghost ring
+// (not recomputable by CR_UpdateOpacity()) cannot influence any PS2 output cell
+#  if ( FLU_GHOST_SIZE != 3 + LR_GHOST_SIZE )
+#     error : ERROR : CR_STREAMING requires FLU_GHOST_SIZE == 3 + LR_GHOST_SIZE (see Macro.h) !!
+#  endif
+
+// the extrema-preserving limiter reconstructs with a +/-2 stencil, which reaches the stale
+// outermost ADV_* ghost ring again and would void the widened-ghost guarantee above
+   if ( OPT__LR_LIMITER == LR_LIMITER_EXTPRE )
+      Aux_Error( ERROR_INFO, "OPT__LR_LIMITER == LR_LIMITER_EXTPRE is not supported for CR_STREAMING !!\n" );
 
 // warning
 // ------------------------------

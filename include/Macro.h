@@ -705,7 +705,16 @@
 #  elif ( FLU_SCHEME == MHM )
 #     define FLU_GHOST_SIZE         ( 1 + LR_GHOST_SIZE )
 #  elif ( FLU_SCHEME == MHM_RP )
+#    ifdef CR_STREAMING
+//    one extra ghost layer so that the outermost ADV_* ghost ring -- which CR_UpdateOpacity()
+//    cannot recompute (no +/-1 neighbors) and therefore keeps stale ghost-filled values --
+//    lies outside the stencil of every PS2 output cell
+//    --> makes the per-patch opacity recomputation equivalent to a global one
+//        (patch-size-independent results, matching Athena++'s per-meshblock recomputation)
+#     define FLU_GHOST_SIZE         ( 3 + LR_GHOST_SIZE )
+#    else
 #     define FLU_GHOST_SIZE         ( 2 + LR_GHOST_SIZE )
+#    endif
 #  elif ( FLU_SCHEME == CTU )
 #    ifdef MHD
 #     define FLU_GHOST_SIZE         ( 2 + LR_GHOST_SIZE )

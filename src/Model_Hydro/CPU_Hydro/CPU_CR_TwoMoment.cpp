@@ -664,6 +664,8 @@ static void CR_ComputeHLLEFlux( const real Ec_L, const real Ec_R,
 //                  at VL2 stage 1
 //               2. vdiff is evaluated at cell centers with the stored ADV_SIGMA
 //               3. Overwrites the CR slots of g_Flux_Half[] computed by Hydro_RiemannPredict_Flux()
+//                  and zeroes the ADV_* slots (sigma_adv/v_adv are work arrays recomputed each step,
+//                  never advected --> matches Athena++, where they are not part of u_cr)
 //
 // Reference   : Athena++ src/cr/integrators/cr_transport.cpp, cr_flux.cpp
 //
@@ -786,6 +788,16 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
          g_Flux_Half[d][CR_F2][idx_flux] = flux_F[1];
          g_Flux_Half[d][CR_F3][idx_flux] = flux_F[2];
 
+//       9. zero the ADV_* flux slots so the flux-divergence update passes these work arrays
+//          through unchanged, instead of advecting them like physical passive scalars
+//          --> the hydro Riemann solvers fill these slots with passive-advection fluxes,
+//              but Athena++ never advects sigma_adv/v_adv (they are not part of u_cr);
+//              this loop covers every face read by Hydro_RiemannPredict(), so dflux[ADV_*]=0
+         g_Flux_Half[d][ADV_SIGMA][idx_flux] = (real)0.0;
+         g_Flux_Half[d][ADV_VX   ][idx_flux] = (real)0.0;
+         g_Flux_Half[d][ADV_VY   ][idx_flux] = (real)0.0;
+         g_Flux_Half[d][ADV_VZ   ][idx_flux] = (real)0.0;
+
       } // CGPU_LOOP( idx, size_i*size_j*size_k )
    } // for (int d=0; d<3; d++)
 
@@ -802,6 +814,9 @@ void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
 // Note        : 1. Uses g_FC_Var for reconstructed left/right states (Ec, Fc, rho, mom)
 //               2. Uses g_PriVar_Half for cell-centered values needed by vdiff (B, sigma_adv)
 //               3. Uses NFlux as the stride for flux array access
+//               4. Overwrites the CR slots of g_FC_Flux[] computed by Hydro_ComputeFlux() and
+//                  zeroes the ADV_* slots (sigma_adv/v_adv are work arrays recomputed each step,
+//                  never advected --> matches Athena++, where they are not part of u_cr)
 //
 // Reference   : Athena++ cr_transport.cpp, cr_flux.cpp
 //
@@ -948,6 +963,16 @@ void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUB
          g_FC_Flux[d][CR_F1][idx_flux] = flux_F[0];
          g_FC_Flux[d][CR_F2][idx_flux] = flux_F[1];
          g_FC_Flux[d][CR_F3][idx_flux] = flux_F[2];
+
+//       9. zero the ADV_* flux slots so the flux-divergence update passes these work arrays
+//          through unchanged, instead of advecting them like physical passive scalars
+//          --> the hydro Riemann solvers fill these slots with passive-advection fluxes,
+//              but Athena++ never advects sigma_adv/v_adv (they are not part of u_cr);
+//              this loop covers every face read by Hydro_FullStepUpdate(), so dFlux[ADV_*]=0
+         g_FC_Flux[d][ADV_SIGMA][idx_flux] = (real)0.0;
+         g_FC_Flux[d][ADV_VX   ][idx_flux] = (real)0.0;
+         g_FC_Flux[d][ADV_VY   ][idx_flux] = (real)0.0;
+         g_FC_Flux[d][ADV_VZ   ][idx_flux] = (real)0.0;
 
       } // CGPU_LOOP( idx, idx_flux_e[0]*idx_flux_e[1]*idx_flux_e[2] )
    } // for (int d=0; d<3; d++)

@@ -13,7 +13,7 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 |---|------|-----------|-----------------|----------------|
 | B1 | TINY_NUMBER: DBL_MIN vs 1e-20 | Easy | Always (incl. current static tests) | **FIX first** |
 | C1 | `va<=TINY` fallback + extra `Ec>TINY` guard | Easy | Edge cells (floored Ec, B~0) | **FIX with B1** |
-| B7a | ADV_* passive-advection fluxes (HLLE skip commented out) | Easy | Always (stored fields, patch edges) | **FIX second** |
+| B7a | ADV_* passive-advection fluxes (HLLE skip commented out) | Easy | Always (stored fields, patch edges) | **FIXED 2026-07-10** |
 | B2 | Gas state fed to source solve (t^n / half-step vs stage-updated) | Easy–Moderate | Live gas only (CR_SOURCE=1 or moving gas) | **FIXED 2026-07-09** |
 | B3 | Missing gas back-reaction at half step | Easy–Moderate | Live gas + CR_SOURCE=1 | **FIXED 2026-07-09** |
 | B4 | ec_source: central-diff vs flux-divergence grad(Pc) | Moderate | Multi-D, moving gas, oblique B | **FIXED 2026-07-09** (full 9-term form; see B9) |
@@ -21,7 +21,7 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 | B5 | Half-step source uses half-step B vs Athena t^n B | Moderate (buffer aliasing) | Evolving B only | FIX-LATER (bundle 2) |
 | B6 | Floor vs gas-energy update ordering in source | Trivial | Only when source drives Ec<0 with CR_SOURCE=1 | Decide with boss (match = trivial; GAMER's version conserves energy better) |
 | B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | Guard now, document retry |
-| B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **ACCEPT** (same class as B.C. cadence) |
+| B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **FIXED 2026-07-10** (FLU_GHOST_SIZE +1; ACCEPT overridden) |
 | C2 | dt criterion semantics | Moderate (framework) | Only if gas speed ~ vmax | ACCEPT + document config rule |
 | C3 | 1D/2D vdiff zeroing (Athena) vs always-3D (GAMER) | Not fixable sensibly | Comparing vs Athena 1D/2D runs with oblique B | ACCEPT + fix comparison protocol |
 | C4 | Defaults: CR_SOURCE=0 vs src_flag=1; CR_VMAX 1e2 vs 1.0 | Trivial | Only if users rely on defaults | Document in PR |
@@ -48,12 +48,68 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
    explicitly zeroed (or the fields skipped in the flux-divergence updates), so the stored
    fields are a well-defined pass-through instead of advected junk. Cheap, removes a
    contamination source at patch edges, and makes B7b easier to reason about.
+   **DONE 2026-07-10.** Implemented by ZEROING the ADV_* flux slots inside
+   `CR_TwoMomentFlux_HalfStep/FullStep()` (new step 9 in both), NOT by enabling the HLLE
+   skip: the zeroing is Riemann-solver-agnostic (the suites use HLLD/HLLE), and skipping
+   inside a solver would leave uninitialized flux slots that the `RSOLVER_RESCUE` NaN scan
+   reads. The CR flux loops cover exactly the faces read by `Hydro_RiemannPredict()` /
+   `Hydro_FullStepUpdate()`, so dflux[ADV_*] = 0 everywhere → exact pass-through for any
+   solver. The dead commented-out skip in `CPU_Shared_RiemannSolver_HLLE.cpp` is removed.
+   Stored ADV_* now hold well-defined values (the half-step `CR_UpdateStreaming` output at
+   PS2 cells) but remain diagnostic-only after B7b — they will NOT match Athena's dumped
+   end-of-step `DefaultOpacity` sigma, so compare Ec/Fc/gas across codes, not sigma.
 4. **B8 guard** — Add a runtime check forbidding (or warning about) `OPT__1ST_FLUX_CORR`
    with CR_STREAMING, since the fallback re-updates CR fields with hydro-only physics.
 5. **C7** — Warn (Aux_Check_Parameter) if CR_STREAMING is compiled in single precision.
 
 After Tier 1, rerun the standard comparison suite; triangular/plateau residuals should
 tighten and patch-edge noise should drop.
+
+### B7b fix (2026-07-10) — stale ADV_* ghost ring eliminated by widening FLU_GHOST_SIZE
+
+Originally classified **ACCEPT** (structural); overridden by decision 2026-07-09 — exact
+patch-size independence is wanted (result with PATCH_SIZE=8 must equal PATCH_SIZE=16).
+
+Mechanism recap: the start-of-step `CR_UpdateOpacity()` recomputes ADV_* only on FLU_NXT
+layers [1, FLU_NXT-2]; layer 0 keeps ghost-filled *stored* values (a neighbor's end-of-step
+ADV_*, not what a wider patch would recompute there). The contamination penetrates exactly
+3 layers per step — ring(0) → half-step cell(1) via vdiff at face 0 → {ADV layer 2 via the
+in-`Hydro_RiemannPredict` opacity central diff; PLM slope of the outermost FC cell} →
+full-step flux at the PS2-edge face → PS2 edge cell — and the old MHM_RP ghost size is
+exactly 3 (`2 + LR_GHOST_SIZE`), so it reached the output every step.
+
+**Fix: `FLU_GHOST_SIZE = 3 + LR_GHOST_SIZE` under CR_STREAMING** (one extra layer; the same
++1 also suffices for PPM, whose deeper stencil is offset by the deeper FC region). Every
+contamination path now dies one layer short of the PS2 output.
+
+Implementation (all sites; compile-verified 2026-07-10 with the PLM config, the PPM+HLLE
+config, and a classic-CR config — the last confirms non-CR_STREAMING builds keep ghost
+size 3 and are bit-identical):
+- `include/Macro.h`: MHM_RP branch gains an `#ifdef CR_STREAMING` giving `3 + LR_GHOST_SIZE`
+  (verified: FLU_GHOST_SIZE=4, FLU_NXT=24 at PS1=8 with PLM).
+- `CPU_Shared_DataReconstruction.cpp` (both variants) and `CPU_FluidSolver_MHM.cpp`
+  (`OffsetPri` for `MHD_ComputeElectric`): the FC↔half-step centering offsets hardcoded
+  `LR_GHOST_SIZE`; now computed generically — `(NIn - N_FC_VAR)/2` and
+  `(N_HF_VAR - N_FC_VAR)/2` — value-identical for every non-CR build (MHM/MHM_RP/CTU).
+- `Aux_Check_Parameter.cpp`: compile-time assert `FLU_GHOST_SIZE == 3 + LR_GHOST_SIZE`
+  under CR_STREAMING; `OPT__LR_LIMITER = LR_LIMITER_EXTPRE` is now an ERROR with
+  CR_STREAMING (its ±2 stencil reaches the stale ring again and would void the guarantee);
+  the "reduce FLU_GHOST_SIZE for performance" warnings are suppressed for CR_STREAMING.
+- No CR-kernel changes needed: all CR offsets were already macro-generic
+  (`fc2pvar_offset`, `pvar_offset`, `half_offset`), and `N_FC_VAR`/`N_FL_FLUX`/PS2 mappings
+  are unchanged — only the half-step region (`N_HF_VAR = FLU_NXT-2`) widens automatically.
+
+Consequences:
+- Per-patch ADV_* recomputation is now equivalent to a global one: **uniform-grid results
+  must be bitwise identical across patch sizes** (PS 8 vs 16 — the acceptance test; dt is a
+  min-reduction, hence order-exact). AMR coarse–fine boundaries still interpolate ghost
+  data — inherent to AMR, not B7b.
+- Stored ADV_* fields no longer influence the evolution AT ALL (they only ever entered
+  through the ring); they are diagnostic-only (dumps/restarts).
+- Cost: FLU_NXT 22→24 at PS1=8 (~+30% ghost-fill/half-step work, +33% MPI halo width);
+  the full step is unchanged; applies to CR_STREAMING builds only.
+- Archived GAMER-vs-Athena results will shift at patch seams (in the improving direction);
+  rerun before comparing.
 
 ### Tier 2 — "coupled-parity bundle 1" (needed only for live-gas matching)
 
@@ -129,12 +185,9 @@ is to do them — they are small and the data is already available in the kernel
 
 ### Not worth fixing — ask for acceptance (with rationale to present)
 
-- **B7b (stale outermost ADV_* ghost ring)** — Structural: GAMER recomputes opacity per
-  patch from ghost-filled data, and the outermost ring cannot be recomputed (no +/-1
-  neighbors). A true fix means widening FLU_GHOST_SIZE or changing the ghost-fill machinery
-  — framework-level surgery for a small extra-dissipation difference at patch edges. Same
-  acceptance class as the B.C. cadence. Suggest: quantify it once (single-patch vs
-  multi-patch run of the same problem, diff the seam cells) so the acceptance is informed.
+- ~~**B7b (stale outermost ADV_* ghost ring)**~~ — was listed here (same acceptance class
+  as the B.C. cadence), but the ACCEPT was overridden and it is **FIXED 2026-07-10** by
+  widening FLU_GHOST_SIZE; see the dedicated section above.
 - **C6 (B.C. once vs twice per step)** — Already accepted by the team; keep it on the list
   so the PR states it explicitly. Note the in-half-step `CR_UpdateOpacity` near domain
   boundaries is where this shows up for the CR module.
@@ -168,3 +221,12 @@ is to do them — they are small and the data is already available in the kernel
   1D axis-aligned suites are unaffected. Runs with live gas or CR_SOURCE=1 (e.g. the
   paper-shock 4.2.2 reproduction) WILL shift at O(dt) — rerun before comparing against
   archived results.
+- B7a/B7b landing note (2026-07-10): compile-verified only (PLM, PPM+HLLE, and classic-CR
+  configs). B7b acceptance test: identical uniform-grid runs with PATCH_SIZE=8 vs 16
+  (fixed-step dumps, `--double=true`) must be **bitwise identical** after the fix — and
+  measurably different before it (that pre-fix diff quantifies the old seam error).
+  Both fixes change results wherever patch boundaries exist, even in 1D static tests
+  (B7a removes advected-junk feedback through the ring, B7b removes the ring's influence
+  entirely), so patch-seam residuals vs Athena should DROP; rerun any archived comparison
+  before reuse. Dumped ADV_* fields are now pass-through diagnostics and will not match
+  Athena's dumped sigma — compare Ec/Fc/gas fields only.

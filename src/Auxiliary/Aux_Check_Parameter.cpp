@@ -1971,6 +1971,12 @@ void Aux_Check_Parameter()
    if ( MPI_Rank == 0 ) {
       if ( CR_CFL < 0.0  ||  CR_CFL > 1.0 )
          Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) is not within the normal range [0...1] !!\n", CR_CFL );
+
+//    the dt criterion folded into CPU_dtSolver_HydroCFL() reproduces Athena's
+//    dt = cfl_number*dh/max(|v|+c_fast, CR_VMAX) only when CR_CFL <= DT__FLUID
+      if ( CR_CFL > DT__FLUID )
+         Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) > DT__FLUID (%14.7e) breaks exact Athena dt parity "
+                              "when gas speeds exceed CR_VMAX !!\n", CR_CFL, DT__FLUID );
    } // if ( MPI_Rank == 0 )
 
 #endif // ifdef CR_STREAMING

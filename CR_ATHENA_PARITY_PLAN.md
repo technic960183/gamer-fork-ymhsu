@@ -22,7 +22,7 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 | B6 | Floor vs gas-energy update ordering in source | Trivial | Only when source drives Ec<0 with CR_SOURCE=1 | Decide with boss (match = trivial; GAMER's version conserves energy better) |
 | B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | Guard now, document retry |
 | B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **FIXED 2026-07-10** (FLU_GHOST_SIZE +1; ACCEPT overridden) |
-| C2 | dt criterion semantics | Moderate (framework) | Only if gas speed ~ vmax | ACCEPT + document config rule |
+| C2 | dt criterion semantics | Easy (was rated Moderate; see section) | Only if gas speed ~ vmax | **FIXED 2026-07-10** (folded into hydro CFL solver; ACCEPT overridden) |
 | C3 | 1D/2D vdiff zeroing (Athena) vs always-3D (GAMER) | Not fixable sensibly | Comparing vs Athena 1D/2D runs with oblique B | ACCEPT + fix comparison protocol |
 | C4 | Defaults: CR_SOURCE=0 vs src_flag=1; CR_VMAX 1e2 vs 1.0 | Trivial | Only if users rely on defaults | Document in PR |
 | C5 | CR_SIGMA input units (paper sigma' vs Athena internal) | None (deliberate) | User inputs | Document prominently |
@@ -110,6 +110,57 @@ Consequences:
   the full step is unchanged; applies to CR_STREAMING builds only.
 - Archived GAMER-vs-Athena results will shift at patch seams (in the improving direction);
   rerun before comparing.
+
+### C2 fix (2026-07-10) — Athena dt semantics folded into the hydro CFL solver
+
+Originally classified **ACCEPT** ("re-engineering GAMER's per-criterion dt framework is not
+worth it"); overridden — the Moderate rating collapses to Easy on one observation: **CR_VMAX
+is spatially constant, so `max(vmax, ·)` commutes with the patch-wide reduction**. Athena's
+per-cell criterion `min_cells dh/max(vmax, |v|+c_fast)` equals `dh/max(vmax, MaxCFL)`, and
+`MaxCFL` (the patch max of |v|+c_fast) is already computed and reduced by the fluid dt
+solver. No per-cell loop, no new reduction, no framework change.
+
+Implementation (run-validated, not just compile-verified):
+- `CPU_dtSolver_HydroCFL.cpp` (GPU covered via the `.cu` symlink): under CR_STREAMING the
+  per-patch output becomes
+  `g_dt_Array[p] = FMIN( dhSafety/MaxCFL, MicroPhy.CR_cfl*dh / FMAX(MicroPhy.CR_vmax, MaxCFL) )`
+  — the same pattern CR_DIFFUSION already uses to fold a second criterion into this solver.
+  GPU impact: ~2 flops in the existing thread-0 epilogue; no new syncs, memory, or signature
+  changes.
+- `Mis_GetTimeStep.cpp` criterion 1.10 (flat `CR_CFL*dh/CR_VMAX`) is **kept, unchanged in
+  value**, as a deliberate fallback: `OPT__FREEZE_FLUID` resets criterion ONE to HUGE_NUMBER,
+  which would otherwise leave frozen-fluid CR runs with no dt limit. It is redundant
+  (always >= the folded term) whenever the fluid criterion is active.
+- `Aux_Check_Parameter.cpp` warns when `CR_CFL > DT__FLUID`.
+
+**New config rule (supersedes "keep vmax >> gas speeds"):** with `CR_CFL <= DT__FLUID`, the
+folded term always wins the min, so GAMER's dt == Athena's `cfl_number*dh/max(|v|+c_fast, vmax)`
+with `CR_CFL` playing the role of Athena's `cfl_number` — at **all** gas speeds.
+
+Remaining (accepted) dt caveats:
+- Athena's dt fast speed augments the normal component: `bx = bcc + |b_face - bcc|`
+  (`hydro/new_blockdt.cpp`); GAMER uses the pure cell-centered B. Identical for B uniform
+  within a cell; otherwise a pre-existing *global hydro-CFL* difference (any MHD comparison),
+  and it only matters where the gas side wins the max.
+- dt facet of C3: Athena 1D/2D runs skip the collapsed directions in the dt min; GAMER is
+  always 3D. Same acceptance/protocol as C3.
+- At Step 0 the fluid part uses `DT__FLUID_INIT`; keep it >= CR_CFL (or accept a smaller
+  first step vs Athena).
+- `Record__TimeStep` column semantics: the "Hydro_CFL" column now includes the CR cap under
+  CR_STREAMING (it ties with "CR_Stream" whenever vmax dominates); "CR_Stream" remains the
+  flat light-crossing value.
+
+Verification (2026-07-10, runs in `bin/agents/cr_c2_dt_semantics/`, triangular test, 10 steps):
+- **No-op check** (CR_VMAX=1e2 >> gas fast speed 1.633): selected dt bitwise unchanged
+  (2.3437500e-5 every step, time history identical); only the Hydro_CFL display column
+  changed (3.8273277e-3 -> 2.3437500e-5, the tie). Confirms all archived/standard suites
+  are unaffected.
+- **Active-regime check** (CR_VMAX=0.5 < 1.633): post-fix dt = 1.4352479e-3 =
+  `0.3*dh/1.6329932` — Athena's formula with cfl_number=0.3, matching the analytic
+  perpendicular fast speed sqrt(8/3) to all printed digits; pre-fix gave 3.8273277e-3
+  (old mixed semantics).
+- Compile checks: cpu_CR_Streaming, other_tests/gpu_CR_Streaming_x (GPU), and
+  cpu_CR_Classic_Diffusion (non-CR_STREAMING path untouched).
 
 ### Tier 2 — "coupled-parity bundle 1" (needed only for live-gas matching)
 
@@ -206,11 +257,12 @@ is to do them — they are small and the data is already available in the kernel
 - **C6 (B.C. once vs twice per step)** — Already accepted by the team; keep it on the list
   so the PR states it explicitly. Note the in-half-step `CR_UpdateOpacity` near domain
   boundaries is where this shows up for the CR module.
-- **C2 (dt semantics)** — Re-engineering GAMER's per-criterion dt framework to Athena's
-  single-CFL max(|v|+c_fast, vmax) is not worth it. Instead document the config rule:
-  set `CR_CFL` = Athena's `cfl_number` and keep vmax >> gas speeds; note the codes diverge
-  if gas speeds approach vmax. (Optional cheap improvement: include |v|+c_fast in the CR
-  criterion, but that still uses a separate CFL knob.)
+- ~~**C2 (dt semantics)**~~ — was listed here ("re-engineering the per-criterion dt
+  framework is not worth it"), but no re-engineering was needed: since CR_VMAX is spatially
+  constant, Athena's per-cell max folds into the already-reduced MaxCFL of the fluid dt
+  solver. **FIXED 2026-07-10**; see the dedicated section above. Config rule is now
+  `CR_CFL <= DT__FLUID` (with CR_CFL = Athena's `cfl_number`) for exact dt parity at all
+  gas speeds.
 - **C3 (dimensionality)** — GAMER is inherently 3D; emulating Athena's 1D/2D vdiff zeroing
   makes no sense. Fix the *comparison protocol* instead: validate only against Athena runs
   with nx2,nx3 > 1 (or axis-aligned B in 1D, where the difference cancels).

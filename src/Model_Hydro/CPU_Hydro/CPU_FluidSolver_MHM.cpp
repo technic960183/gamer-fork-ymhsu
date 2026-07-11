@@ -553,6 +553,24 @@ void CPU_FluidSolver_MHM(
             AdaptiveMinModCoeff = FMAX( AdaptiveMinModCoeff, (real)0.0 );
 
 
+#           ifdef CR_STREAMING
+//          restore ADV_* in g_PriVar_Half_1PG[] before a retry: the previous iteration's
+//          CR_UpdateStreaming() overwrote them in-place with DefaultStreaming values;
+//          CR_UpdateOpacity() reads only DENS/CR_E/B, none of which are written inside this
+//          loop, so it regenerates bitwise the values the first iteration saw
+//          (same call as at the end of Hydro_RiemannPredict())
+            if ( Iteration > 0 )
+            {
+               CR_UpdateOpacity( reinterpret_cast<real*>(g_PriVar_Half_1PG), CUBE(FLU_NXT),
+                                 g_PriVar_Half_1PG+MAG_OFFSET,
+                                 N_HF_VAR, N_HF_VAR, N_HF_VAR, 1, 1, N_HF_VAR-2, dh, &MicroPhy );
+#              ifdef __CUDACC__
+               __syncthreads();
+#              endif
+            }
+#           endif // #ifdef CR_STREAMING
+
+
 //          1-a-5. evaluate the face-centered values by data reconstruction
 //                 --> note that g_PriVar_Half_1PG[] returned by Hydro_RiemannPredict() stores the primitive variables
             Hydro_DataReconstruction( NULL, g_FC_Mag_Half_1PG, g_PriVar_Half_1PG, g_FC_Var_1PG, g_Slope_PPM_1PG,

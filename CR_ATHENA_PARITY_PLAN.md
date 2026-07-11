@@ -11,8 +11,8 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 
 | # | Item | Difficulty | When it matters | Recommendation |
 |---|------|-----------|-----------------|----------------|
-| B1 | TINY_NUMBER: DBL_MIN vs 1e-20 | Easy | Always (incl. current static tests) | **FIX first** |
-| C1 | `va<=TINY` fallback + extra `Ec>TINY` guard | Easy | Edge cells (floored Ec, B~0) | **FIX with B1** |
+| B1 | TINY_NUMBER: DBL_MIN vs 1e-20 | Easy | Edge cells only (see 2026-07-11 note) | **OPEN — deferred**; sites tagged `[B1]` in source |
+| C1 | `va<=TINY` fallback + extra `Ec>TINY` guard | Easy | Edge cells (floored Ec, B~0) | **OPEN — deferred with B1**; sites tagged `[C1]` in source |
 | B7a | ADV_* passive-advection fluxes (HLLE skip commented out) | Easy | Always (stored fields, patch edges) | **FIXED 2026-07-10** |
 | B2 | Gas state fed to source solve (t^n / half-step vs stage-updated) | Easy–Moderate | Live gas only (CR_SOURCE=1 or moving gas) | **FIXED 2026-07-09** |
 | B3 | Missing gas back-reaction at half step | Easy–Moderate | Live gas + CR_SOURCE=1 | **FIXED 2026-07-09** |
@@ -20,29 +20,40 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
 | B9 | grad(Pc) diagonal-only vs Athena's full 9-term flux divergence (new finding 2026-07-09) | Easy (mechanical) | Multi-D / oblique B with streaming | **FIXED 2026-07-09** (see Tier 2 item 9) |
 | B5 | Half-step source uses half-step B vs Athena t^n B | Moderate (buffer aliasing) | Evolving B only | **FIXED 2026-07-10** (recompute t^n B from face-centered input) |
 | B6 | Floor vs gas-energy update ordering in source | Trivial | Only when source drives Ec<0 with CR_SOURCE=1 | Decide with boss (match = trivial; GAMER's version conserves energy better) |
-| B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | Guard now, document retry |
-| B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **FIXED 2026-07-10** (FLU_GHOST_SIZE +1; ACCEPT overridden) |
+| B8 | MinMod retry reuses mutated sigma; 1st-order-flux-corr fallback | Easy (guard) / Moderate (retry) | Solver-failure paths only | **FIXED 2026-07-11** (guard + retry) |
+| B7b | Stale ADV_* in outermost ghost ring | Hard (structural) | Patch-boundary cells, every step | **FIXED 2026-07-10, run-validated 2026-07-11** (FLU_GHOST_SIZE +1; 1D streaming now matches Athena to double precision) |
 | C2 | dt criterion semantics | Easy (was rated Moderate; see section) | Only if gas speed ~ vmax | **FIXED 2026-07-10** (folded into hydro CFL solver; ACCEPT overridden) |
 | C3 | 1D/2D vdiff zeroing (Athena) vs always-3D (GAMER) | Not fixable sensibly | Comparing vs Athena 1D/2D runs with oblique B | ACCEPT + fix comparison protocol |
 | C4 | Defaults: CR_SOURCE=0 vs src_flag=1; CR_VMAX 1e2 vs 1.0 | Trivial | Only if users rely on defaults | Document in PR |
 | C5 | CR_SIGMA input units (paper sigma' vs Athena internal) | None (deliberate) | User inputs | Document prominently |
 | C6 | B.C. applied once/step vs twice/step | Hard (structural) | Domain boundaries | **ACCEPT** (already agreed) |
-| C7 | Double precision not enforced | Trivial | Validation runs | Add check/warning |
+| C7 | Double precision not enforced | Trivial | Validation runs | **CLOSED 2026-07-11** (no action; double is a comparison-protocol choice, not a module requirement) |
 
 ## Suggested order of work
 
-### Tier 1 — do before the PR (improves the tests you already have)
+### Tier 1 — status after the 2026-07-11 decisions
 
-1. **B1 (TINY_NUMBER)** — Define a CR-module constant equal to Athena's `1.0e-20` and use it
-   for every threshold inside the CR kernel (dpc_sign deadband, Ec floor value, va/btot
-   checks, HLLE degenerate check, source floor). Do **not** change GAMER's global
-   `TINY_NUMBER` — that would ripple through the whole framework. This is the cheapest fix
-   with the largest expected payoff: it directly targets the sgn-amplifier residual
-   (triangular test ~1e-8) and makes the Ec floor value identical.
-2. **C1 (fallback semantics)** — While in there, reproduce Athena's exact fallback branches:
-   `DefaultStreaming` leaves sigma_adv *unchanged* when va<=TINY (GAMER sets max_opacity),
-   and Athena has no `Ec > TINY` guard (safe to drop once the floor is 1e-20, so the
-   1/Ec blow-up matches Athena's).
+**Context that changed the calculus:** the B7a+B7b fixes were run-validated on 2026-07-11 —
+1D streaming now matches Athena to **double precision**. B7b (the stale ADV_* ghost ring),
+not B1, was therefore the dominant cause of the old triangular ~1e-8 residual, and B1's
+"largest expected payoff" (below) has already been captured.
+
+1. **B1 (TINY_NUMBER)** — **OPEN, deferred** (decision 2026-07-11; fix deliberately not
+   applied for now, difference accepted). Original idea kept for reference: define a
+   CR-module constant equal to Athena's `1.0e-20` and use it for every threshold inside the
+   CR kernel (dpc_sign deadband, Ec floor value, va/btot checks, HLLE degenerate check,
+   source floor); do **not** change GAMER's global `TINY_NUMBER`. Remaining exposure is
+   edge-case only: cells where |B·∇Pc|, va, or Ec fall between DBL_MIN and 1e-20 — none
+   occur in the validated suites. All affected thresholds are tagged **`[B1]`** in
+   `CPU_CR_TwoMoment.cpp` (with a summary block at the top of the file); if a future
+   comparison shows noise at plateaus/extrema (roundoff-level ∇Pc), suspect these first.
+2. **C1 (fallback semantics)** — **OPEN, deferred with B1** (decision 2026-07-11): keep
+   GAMER's `Ec > TINY` guard and the max_opacity cap. The original fix ("drop the guard")
+   was only safe with a 1e-20 floor — with the floor at DBL_MIN, Athena's 1/Ec blow-up
+   would overflow, so the guard is mandatory as long as B1 stays open. Sites tagged
+   **`[C1]`** in `CPU_CR_TwoMoment.cpp`. Consequence: floored-Ec / degenerate-B cells will
+   not match Athena's sigma_adv (GAMER caps, Athena blows up ∝1/Ec — GAMER's is the safer
+   behavior).
 3. **B7a (ADV_* advection)** — Stop the hydro solver from advecting ADV_SIGMA/ADV_VX/VY/VZ:
    uncomment/enable the skip in the HLLE passive loop **and** make sure those flux slots are
    explicitly zeroed (or the fields skipped in the flux-divergence updates), so the stored
@@ -58,12 +69,42 @@ Item numbers (B1..B8, C1..C7) refer to the review report.
    Stored ADV_* now hold well-defined values (the half-step `CR_UpdateStreaming` output at
    PS2 cells) but remain diagnostic-only after B7b — they will NOT match Athena's dumped
    end-of-step `DefaultOpacity` sigma, so compare Ec/Fc/gas across codes, not sigma.
-4. **B8 guard** — Add a runtime check forbidding (or warning about) `OPT__1ST_FLUX_CORR`
-   with CR_STREAMING, since the fallback re-updates CR fields with hydro-only physics.
-5. **C7** — Warn (Aux_Check_Parameter) if CR_STREAMING is compiled in single precision.
+4. **B8 (guard + retry)** — **FIXED 2026-07-11**; see the dedicated section below.
+5. **C7** — **CLOSED 2026-07-11, no action.** The CR module does not require double
+   precision by nature; `--double=true` was only ever a comparison-protocol choice for the
+   Athena validation runs. Too basic to warrant even a user-facing note.
 
-After Tier 1, rerun the standard comparison suite; triangular/plateau residuals should
-tighten and patch-edge noise should drop.
+### B8 fix (2026-07-11) — solver-failure paths (compile-verified, per decision: no runs)
+
+Finding 8 had two INDEPENDENT halves; fixing one does not cover the other:
+
+- **Guard (host-side 1st-order flux correction):** `Flu_Close()`'s fallback recomputes
+  failing cells with pure-hydro 1st-order Riemann fluxes — CR_E/CR_F* become passively
+  advected scalars (no two-moment flux, no source) and ADV_* gets re-advected (also voiding
+  the B7a pass-through there). Critically, `OPT__1ST_FLUX_CORR` **defaults ON** for MHD
+  (`FIRST_FLUX_CORR_3D`, `Init_ResetParameter.cpp`), so every CR_STREAMING run had it armed.
+  Fix follows the existing SRHD precedent: `Init_ResetParameter.cpp` now defaults
+  `OPT__1ST_FLUX_CORR = FIRST_FLUX_CORR_NONE` under CR_STREAMING when the user left it at
+  -1; if the user enables it explicitly, `Aux_Check_Parameter.cpp` fires a warning stating
+  the cost (CR fields updated with hydro-only physics wherever the correction triggers).
+- **Retry (in-kernel MinMod loop, `MINMOD_MAX_ITER > 0` only; default 0 = off):** the retry
+  re-runs reconstruction→fluxes→streaming→source with full CR physics, but the previous
+  iteration's `CR_UpdateStreaming()` had overwritten ADV_* in `g_PriVar_Half` in-place, so
+  retries saw DefaultStreaming values where the first attempt saw DefaultOpacity values.
+  Fix: at the top of the retry body (`CPU_FluidSolver_MHM.cpp`, MHM_RP do-loop), guarded by
+  `Iteration > 0`, re-issue the exact end-of-`Hydro_RiemannPredict()` `CR_UpdateOpacity()`
+  call. `CR_UpdateOpacity()` reads only DENS/CR_E/B — none written inside the loop — so the
+  restore is bitwise-exact, and the `Iteration > 0` guard makes the non-retry path provably
+  unchanged (no revalidation of existing suites needed). GPU via the `.cu` symlink
+  (`__syncthreads()` after the call; `Iteration` is block-uniform so the branch is safe);
+  no new memory, no signature changes. Note Athena has no retry at all, so this fix buys
+  GAMER *iteration-independence* (self-consistency), not Athena parity — for strict parity
+  keep `MINMOD_MAX_ITER=0` (the default).
+
+Compile-verified (cpu_CR_Streaming, other_tests/gpu_CR_Streaming_x, cpu_CR_Classic_Diffusion
+— the last confirms the non-CR_STREAMING paths of `Init_ResetParameter`/`Aux_Check_Parameter`
+still build). Per decision, no runtime tests: the guard is init-time logic and the retry is
+bitwise-inert unless a full-step failure occurs with `MINMOD_MAX_ITER > 0`.
 
 ### B7b fix (2026-07-10) — stale ADV_* ghost ring eliminated by widening FLU_GHOST_SIZE
 
@@ -245,9 +286,9 @@ is to do them — they are small and the data is already available in the kernel
     is better physics. Present both options to the boss: exact match vs documented
     improvement. Either way it is a one-screen change.
 
-11. **B8 retry** — If exactness under solver retries is ever needed, re-derive ADV_* at the
-    top of each retry iteration. Low priority: Athena has no analogous retry at all, so any
-    retry behavior is already "beyond Athena".
+11. **B8 retry** — **FIXED 2026-07-11** exactly as described here (re-derive ADV_* at the
+    top of each retry iteration); see the dedicated B8 section under Tier 1. Athena has no
+    analogous retry at all, so this is a self-consistency fix, "beyond Athena".
 
 ### Not worth fixing — ask for acceptance (with rationale to present)
 
@@ -289,7 +330,10 @@ is to do them — they are small and the data is already available in the kernel
   paper-shock 4.2.2 reproduction) WILL shift at O(dt) — rerun before comparing against
   archived results.
 - B7a/B7b landing note (2026-07-10): compile-verified only (PLM, PPM+HLLE, and classic-CR
-  configs). B7b acceptance test: identical uniform-grid runs with PATCH_SIZE=8 vs 16
+  configs). **RUN-VALIDATED 2026-07-11: 1D streaming now matches Athena to double
+  precision** — confirming B7b was the dominant cause of the old triangular ~1e-8 residual
+  (the earlier "sgn-amplifier, unfixable" attribution is superseded).
+  B7b acceptance test: identical uniform-grid runs with PATCH_SIZE=8 vs 16
   (fixed-step dumps, `--double=true`) must be **bitwise identical** after the fix — and
   measurably different before it (that pre-fix diff quantifies the old seam error).
   Both fixes change results wherever patch boundaries exist, even in 1D static tests

@@ -106,7 +106,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
    const real bxby = SQRT( SQR(Bx) + SQR(By) );
    const real btot = SQRT( SQR(Bx) + SQR(By) + SQR(Bz) );
 
-   if ( btot > TINY_NUMBER ) {
+   if ( btot > TINY_NUMBER ) {  // [B1] Athena: 1e-20
       sint = bxby / btot;       // sin(theta) = |Bxy|/|B|
       cost = Bz / btot;         // cos(theta) = Bz/|B|
    } else {
@@ -114,7 +114,7 @@ static void CR_ComputeBFieldAngles( const real Bx, const real By, const real Bz,
       cost = (real)0.0;
    }
 
-   if ( bxby > TINY_NUMBER ) {
+   if ( bxby > TINY_NUMBER ) {  // [B1] Athena: 1e-20
       sinp = By / bxby;         // sin(phi) = By/|Bxy|
       cosp = Bx / bxby;         // cos(phi) = Bx/|Bxy|
    } else {
@@ -167,9 +167,9 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
 
 // determine sign of B dot grad(Pc)
    real dpc_sign = (real)0.0;
-   if ( b_grad_pc > TINY_NUMBER )
+   if ( b_grad_pc > TINY_NUMBER )         // [B1] Athena: 1e-20 deadband
       dpc_sign = (real)1.0;
-   else if ( -b_grad_pc > TINY_NUMBER )
+   else if ( -b_grad_pc > TINY_NUMBER )   // [B1]
       dpc_sign = (real)-1.0;
 
 // compute streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
@@ -183,7 +183,7 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
 
 // compute streaming opacity (parallel to B)
 // sigma_adv = |B dot grad Pc| / (|B| * v_A * (4/3) * (1/vmax) * Ec)
-   if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
+   if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {  // [B1][C1] Athena: no Ec guard, keeps old sigma_adv when va<=1e-20
       sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
    } else {
       sigma_adv = MicroPhy->CR_max_opacity;
@@ -412,9 +412,9 @@ void CR_UpdateOpacity( real *g_Output,
 
 //    determine sign of B dot grad(Pc)
       real dpc_sign = (real)0.0;
-      if ( b_grad_pc > TINY_NUMBER )
+      if ( b_grad_pc > TINY_NUMBER )         // [B1] Athena: 1e-20 deadband
          dpc_sign = (real)1.0;
-      else if ( -b_grad_pc > TINY_NUMBER )
+      else if ( -b_grad_pc > TINY_NUMBER )   // [B1]
          dpc_sign = (real)-1.0;
 
 //    compute streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
@@ -430,7 +430,7 @@ void CR_UpdateOpacity( real *g_Output,
 //    compute streaming opacity (parallel to B)
 //    sigma_adv = |B dot grad Pc| / (|B| * v_A * (4/3) * (1/vmax) * Ec)
       real sigma_adv;
-      if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
+      if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {  // [B1][C1] Athena: no Ec guard, keeps old sigma_adv when va<=1e-20
          sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
       } else {
          sigma_adv = MicroPhy->CR_max_opacity;
@@ -643,7 +643,7 @@ static void CR_ComputeHLLEFlux( const real Ec_L, const real Ec_R,
 
 // HLLE flux formula
    real tmp = (real)0.0;
-   if ( FABS(bm - bp) > TINY_NUMBER )
+   if ( FABS(bm - bp) > TINY_NUMBER )  // [B1] Athena: 1e-20
       tmp = (real)0.5 * (bp + bm) / (bp - bm);
 
    flux_E    = (real)0.5 * (fl_e  + fr_e ) + (fl_e  - fr_e ) * tmp;
@@ -1216,7 +1216,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 #  endif
 
 // 12. Floor CR energy
-   if ( new_ec < TINY_NUMBER )
+   if ( new_ec < TINY_NUMBER )  // [B1] Athena: < 0.0 (and floors AFTER the gas-energy update; see plan item B6)
       new_ec = ec_old;
 
 // 13. Apply back-reaction to gas momentum and energy, matching Athena++'s stage-agnostic
@@ -1493,7 +1493,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 #     endif
 
 //    12. floor CR energy
-      if ( new_ec < TINY_NUMBER )
+      if ( new_ec < TINY_NUMBER )  // [B1] Athena: < 0.0 (and floors AFTER the gas-energy update; see plan item B6)
          new_ec = ec_old;
 
 //    13. apply back-reaction to gas momentum and energy

@@ -1977,6 +1977,13 @@ void Aux_Check_Parameter()
       if ( CR_CFL > DT__FLUID )
          Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) > DT__FLUID (%14.7e) breaks exact Athena dt parity "
                               "when gas speeds exceed CR_VMAX !!\n", CR_CFL, DT__FLUID );
+
+//    the 1st-order flux correction recomputes failing cells with hydro-only fluxes, which
+//    update CR_E/CR_F* as passively advected scalars WITHOUT any two-moment physics
+//    (disabled by default for CR_STREAMING; see Init_ResetParameter())
+      if ( OPT__1ST_FLUX_CORR != FIRST_FLUX_CORR_NONE )
+         Aux_Message( stderr, "WARNING : OPT__1ST_FLUX_CORR re-updates CR fields with hydro-only 1st-order fluxes "
+                              "(no two-moment physics) on cells where it triggers !!\n" );
    } // if ( MPI_Rank == 0 )
 
 #endif // ifdef CR_STREAMING

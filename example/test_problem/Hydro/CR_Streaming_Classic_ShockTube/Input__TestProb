@@ -1,9 +1,0 @@
-# problem-specific runtime parameters
-# Port of the classic CR_ShockTube test into the two-moment module to compare CR_E against CRay.
-# The classic test has NO diffusion: the CR is a second fluid (gamma_cr=4/3) coupled to the gas by
-# pressure and advected.  Here it is emulated by locking the CR to the gas (CR_SIGMA=1e8, CR_STREAM=0)
-# with CR_SOURCE=1 providing the CR-pressure back-reaction (single-fluid CR-hydro limit).
-# Hardcoded L/R states in SetGridIC: L(x<xc) rho=1,Pgas=6.7e4,Pcr=1.3e5 ; R(x>xc) rho=0.2,Pgas=Pcr=2.4e2.
-CR_Streaming_Test        8              # 8 = classic CR_ShockTube
-CR_Streaming_Dir         0              # shock normal along x
-CR_Streaming_FlowV       0.0            # no background flow

@@ -22,6 +22,8 @@
 #define CR_TEST_CLASSIC_SOUNDWAVE 9     // classic CR_SoundWave : CR-modified acoustic wave, CR locked to gas
 // -- the paper's own CR-modified shock test (Jiang & Oh 2018, Sec 4.2.2, Fig 11) --
 #define CR_TEST_PAPER_SHOCK      10     // Sec 4.2.2 : colliding-flow CR-modified shock (streaming + diffusion + advection)
+// -- 3D generalization of the CR-driven blast (Sec 4.2.3) with a configurable B direction --
+#define CR_TEST_BLAST_3D         11     // 3D CR-driven blast wave; B direction set by CR_Streaming_B_theta/B_phi
 
 
 // problem-specific global variables
@@ -35,6 +37,11 @@ static double CR_Streaming_Ec0;          // uniform CR energy density for the sh
 static int    CR_Streaming_FcInit;       // shock-test initial CR flux: 1 = advective Fc=(4/3)v*Ec (paper),
                                          // 0 = zero (avoids the sharp t=0 flux discontinuity at the collision;
                                          //     the flux relaxes to the advective value on ~1/(Vm*sigma))
+static double CR_Streaming_B_theta;      // polar angle (deg, from +z axis) of the uniform B field for the 3D blast
+static double CR_Streaming_B_phi;        // azimuthal angle (deg, in the x-y plane from +x axis) of the uniform B
+                                         // field for the 3D blast --> B = (sinT cosP, sinT sinP, cosT), |B| = 1;
+                                         // the default (theta=90, phi=0) reproduces the 2D-blast B||x
+                                         // (only used by CR_TEST_BLAST_3D)
 static int    CR_Streaming_GradOutflowBC; // 1 = gradient-preserving CR outflow BC on both x faces (streaming
                                          // tests): linear-extrapolate Ec (positive-clamped) + copy Fc so the
                                          // boundary Pc gradient keeps full strength and the profile tracks the
@@ -53,6 +60,7 @@ void ShockBC( real Array[], const int ArraySize[], real fluid[], const int NVar_
 void GradOutflowBC( real Array[], const int ArraySize[], real fluid[], const int NVar_Flu,
                     const int GhostSize, const int idx[], const double pos[], const double Time,
                     const int lv, const int TFluVarIdxList[], double AuxArray[] );
+bool Flag_CR_Streaming( const int i, const int j, const int k, const int lv, const int PID, const double *Threshold );
 #endif
 
 
@@ -141,12 +149,14 @@ void SetParameter()
 // ********************************************************************************************************************************
 // ReadPara->Add( "KEY_IN_THE_FILE",   &VARIABLE,              DEFAULT,       MIN,              MAX               );
 // ********************************************************************************************************************************
-   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                10                );
+   ReadPara->Add( "CR_Streaming_Test",  &CR_Streaming_Test,      0,           0,                11                );
    ReadPara->Add( "CR_Streaming_Dir",   &CR_Streaming_Dir,       0,           0,                3                 );
    ReadPara->Add( "CR_Streaming_FlowV", &CR_Streaming_FlowV,     0.0,         NoMin_double,     NoMax_double      );
    ReadPara->Add( "CR_Streaming_Ec0",   &CR_Streaming_Ec0,       1.0,         Eps_double,       NoMax_double      );
    ReadPara->Add( "CR_Streaming_FcInit", &CR_Streaming_FcInit,    1,           0,                1                 );
    ReadPara->Add( "CR_Streaming_GradOutflowBC", &CR_Streaming_GradOutflowBC, 0, 0,               1                 );
+   ReadPara->Add( "CR_Streaming_B_theta", &CR_Streaming_B_theta,  90.0,        NoMin_double,     NoMax_double      );
+   ReadPara->Add( "CR_Streaming_B_phi",   &CR_Streaming_B_phi,     0.0,        NoMin_double,     NoMax_double      );
 
    ReadPara->Read( FileName );
 
@@ -155,6 +165,12 @@ void SetParameter()
 // (1-2) set the default values
 
 // (1-3) check the runtime parameters
+// the configurable B direction is only wired up for the 3D blast; guard against silently
+// ignoring a non-default angle for any other test
+   if ( CR_Streaming_Test != CR_TEST_BLAST_3D  &&
+        ( CR_Streaming_B_theta != 90.0  ||  CR_Streaming_B_phi != 0.0 ) )
+      Aux_Error( ERROR_INFO, "CR_Streaming_B_theta/B_phi are only supported for CR_Streaming_Test = %d (3D blast) !!\n",
+                 CR_TEST_BLAST_3D );
 
 
 // (2) set the problem-specific derived parameters
@@ -221,6 +237,8 @@ void SetParameter()
       Aux_Message( stdout, "  CR_Streaming_Ec0      = %14.7e\n", CR_Streaming_Ec0   );
       Aux_Message( stdout, "  CR_Streaming_FcInit   = %d\n",     CR_Streaming_FcInit );
       Aux_Message( stdout, "  CR_Streaming_GradOutflowBC = %d\n", CR_Streaming_GradOutflowBC );
+      Aux_Message( stdout, "  CR_Streaming_B_theta  = %14.7e\n", CR_Streaming_B_theta );
+      Aux_Message( stdout, "  CR_Streaming_B_phi    = %14.7e\n", CR_Streaming_B_phi   );
       Aux_Message( stdout, "=============================================================================\n" );
    }
 
@@ -360,6 +378,19 @@ void SetGridIC( real fluid[], const double x, const double y, const double z, co
 //       Sec 4.2.3: Ec = 100 inside r < 0.02, else 0.1; uniform background (rho=1, Eint=2.5)
          const double dx = x - xc, dy = y - yc;
          const double r  = std::sqrt( dx*dx + dy*dy );
+         cr_E = ( r < 0.02 ) ? 100.0 : 0.1;
+         Pgas = (GAMMA - 1.0)*2.5;               // background internal energy = 2.5
+         break;
+      }
+
+      case CR_TEST_BLAST_3D :
+      {
+//       3D generalization of Sec 4.2.3: identical to CR_TEST_BLAST_2D but with a spherical
+//       (rather than cylindrical) CR overpressure and a configurable B direction (set in
+//       SetBFieldIC via CR_Streaming_B_theta/B_phi):
+//       Ec = 100 inside r < 0.02, else 0.1; uniform background (rho=1, Eint=2.5)
+         const double dx = x - xc, dy = y - yc, dz = z - amr->BoxCenter[2];
+         const double r  = std::sqrt( dx*dx + dy*dy + dz*dz );
          cr_E = ( r < 0.02 ) ? 100.0 : 0.1;
          Pgas = (GAMMA - 1.0)*2.5;               // background internal energy = 2.5
          break;
@@ -580,6 +611,19 @@ void SetBFieldIC( real magnetic[], const double x, const double y, const double 
             magnetic[MAGZ] = ( CR_Streaming_Dir==2 ) ? 1.0 : 0.0;
          }
          break;
+
+      case CR_TEST_BLAST_3D :
+      {
+//       uniform field in the direction (theta, phi), |B| = 1  --> v_A = 1  (rho = 1):
+//          B = ( sinT cosP, sinT sinP, cosT ),  theta = polar angle from +z, phi = azimuth from +x
+//       the angles are given in degrees; the default (theta=90, phi=0) recovers B||x (the 2D blast)
+         const double theta = CR_Streaming_B_theta * M_PI/180.0;
+         const double phi   = CR_Streaming_B_phi   * M_PI/180.0;
+         magnetic[MAGX] = std::sin(theta)*std::cos(phi);
+         magnetic[MAGY] = std::sin(theta)*std::sin(phi);
+         magnetic[MAGZ] = std::cos(theta);
+         break;
+      }
 
       case CR_TEST_BOTTLENECK_1D :
       case CR_TEST_WAVE_1D :
@@ -809,6 +853,10 @@ void Init_TestProb_Hydro_CR_Streaming()
 #  ifdef MHD
    Init_Function_BField_User_Ptr     = SetBFieldIC;
 #  endif
+
+// static, hollow spherical-shell refinement (enabled by OPT__FLAG_USER with OPT__FLAG_USER_NUM=2;
+// the inner/outer shell radii per level are given in "Input__Flag_User")
+   Flag_User_Ptr                     = Flag_CR_Streaming;
 
 // the bottleneck test injects CRs through a user boundary condition on the -x face
    if ( CR_Streaming_Test == CR_TEST_BOTTLENECK_1D )

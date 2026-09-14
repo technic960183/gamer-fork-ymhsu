@@ -382,8 +382,8 @@ extern InterpolationHandler Int_InterpolationHandler;
 
 // (2-13) cosmic ray
 // =======================================================================================================
-// GAMMA_CR (CR adiabatic index) is shared by the classic (COSMIC_RAY) and two-moment (CR_STREAMING) modules
-#if ( defined COSMIC_RAY  ||  defined CR_STREAMING )
+// GAMMA_CR (CR adiabatic index) is shared by the classic (COSMIC_RAY) and two-moment (CR_TWOMOMENT) modules
+#if ( defined COSMIC_RAY  ||  defined CR_TWOMOMENT )
 extern double GAMMA_CR;
 #endif
 #ifdef COSMIC_RAY
@@ -402,7 +402,7 @@ extern double DT__CR_DIFFUSION;
 extern double CR_DIFF_MIN_B;
 #endif
 
-#ifdef CR_STREAMING
+#ifdef CR_TWOMOMENT
 extern bool   CR_SOURCE;
 extern bool   CR_STREAM;
 extern bool   CR_EC_SOURCE;

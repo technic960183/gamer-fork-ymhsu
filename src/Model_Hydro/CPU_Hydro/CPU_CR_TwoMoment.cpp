@@ -1,6 +1,6 @@
 #include "CUFLU.h"
 
-#ifdef CR_STREAMING
+#ifdef CR_TWOMOMENT
 
 
 
@@ -1036,7 +1036,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
 
 // 3. Get B field: t^n cell-centered B passed in by the caller, matching Athena++'s stage-1 b_angle
 //    computed from the t^n bcc — NOT the CT-half-step-updated OneCell[MAG_OFFSET+*] (see Note 7)
-//    (MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
+//    (MHD is compile-enforced for CR_TWOMOMENT, see Aux_Check_Parameter.cpp)
    const real Bx = B_n[MAGX];
    const real By = B_n[MAGY];
    const real Bz = B_n[MAGZ];
@@ -1300,7 +1300,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       real v3 = g_Output[MOMZ][idx_out] / rho;
 
 //    3. get cell-centered B field from half-step primitive variables
-//       (MHD is compile-enforced for CR_STREAMING, see Aux_Check_Parameter.cpp)
+//       (MHD is compile-enforced for CR_TWOMOMENT, see Aux_Check_Parameter.cpp)
       const real Bx = g_PriVar_Half[MAG_OFFSET+MAGX][idx_pvar];
       const real By = g_PriVar_Half[MAG_OFFSET+MAGY][idx_pvar];
       const real Bz = g_PriVar_Half[MAG_OFFSET+MAGZ][idx_pvar];
@@ -1431,7 +1431,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 
 //    flux index: one flux ring is skipped along each transverse direction for the CT electric
 //    field, hence the +1 offset (same mapping as Hydro_FullStepUpdate() with MHD, which is
-//    compile-enforced for CR_STREAMING)
+//    compile-enforced for CR_TWOMOMENT)
       const int idx_flux = IDX321( i_out+1, j_out+1, k_out+1, N_FL_FLUX, N_FL_FLUX );
 
       const int CRF_v[3] = { CR_F1, CR_F2, CR_F3 };  // CR_F* field indices DESCEND, hence the explicit list
@@ -1489,4 +1489,4 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 
 } // FUNCTION : CR_TwoMomentSource_FullStep
 
-#endif // #ifdef CR_STREAMING
+#endif // #ifdef CR_TWOMOMENT

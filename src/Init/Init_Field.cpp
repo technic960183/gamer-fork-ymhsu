@@ -139,7 +139,7 @@ void Init_Field()
 // 4. must put all built-in scalars at the END of the field list and with the same order as their
 //    corresponding symbolic constants (e.g., DUAL/CRAY) defined in Macro.h
 //    --> as we still rely on these constants (e.g., DENS, DUAL) in the fluid solvers
-#  ifdef CR_STREAMING
+#  ifdef CR_TWOMOMENT
    // CR streaming advection fields (sigma_adv and v_adv components)
    // --> FIXUP_FLUX_NO since these are auxiliary fields that don't need flux correction
    Idx_ADV_VZ    = AddField( "ADV_VZ",    FIXUP_FLUX_NO, FIXUP_REST_YES, FLOOR_NO, NORMALIZE_NO, INTERP_FRAC_NO );

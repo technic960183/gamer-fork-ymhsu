@@ -160,27 +160,23 @@ void CR_AddDiffuseFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
 #ifdef CR_STREAMING
 void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                                   real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                            const real g_FC_B[][ SQR(FLU_NXT)*FLU_NXT_P1 ],   //unuse
                             const real g_CC_B[][ CUBE(FLU_NXT) ],
                             const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentFlux_FullStep( const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],
                                  const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                        real g_FC_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
-                                 const real g_FC_B_Half[][ FLU_NXT_P1*SQR(FLU_NXT) ],   //unuse
                                  const int NFlux, const int NSkip_N, const int NSkip_T,
                                  const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
                             const real g_ConVar_In[][ CUBE(FLU_NXT) ],
                             const real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
                             const real B_n[],
-                            const int idx_in, const int didx_in[3],   //unuse: didx_in
-                            const int idx_flux, const int didx_flux[3],
-                            const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );   //unuse: EoS
+                            const int idx_in, const int idx_flux, const int didx_flux[3],
+                            const real dt, const real dh, const MicroPhy_t *MicroPhy );
 void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                       real g_Output[][ CUBE(PS2) ],
-                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],   //unuse
-                                const real g_FC_Var[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_VAR) ],   //unuse
-                                const real dt, const real dh, const EoS_t *EoS, const MicroPhy_t *MicroPhy );   //unuse: EoS
+                                const real g_Flux[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
+                                const real dt, const real dh, const MicroPhy_t *MicroPhy );
 void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
                        const real g_CellVar[][ CUBE(FLU_NXT) ],
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
@@ -502,7 +498,7 @@ void CPU_FluidSolver_MHM(
 
 
 #        ifdef CR_STREAMING
-         CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_Mag_Array_In[P], g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
+         CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
 
 //       update streaming velocity/opacity after half-step flux computation (DefaultStreaming)
 //       output: g_Flu_Array_In[P], input: same array, B from g_PriVar_1PG+MAG_OFFSET
@@ -630,7 +626,7 @@ void CPU_FluidSolver_MHM(
 #           endif
 
 #           ifdef CR_STREAMING
-            CR_TwoMomentFlux_FullStep( g_FC_Var_1PG, g_PriVar_Half_1PG, g_FC_Flux_1PG, g_FC_Mag_Half_1PG,
+            CR_TwoMomentFlux_FullStep( g_FC_Var_1PG, g_PriVar_Half_1PG, g_FC_Flux_1PG,
                                        N_FL_FLUX, NSkip_N, NSkip_T, dh, &MicroPhy );
 
 //          update streaming velocity/opacity after full-step flux computation (DefaultStreaming)
@@ -689,8 +685,8 @@ void CPU_FluidSolver_MHM(
 #           endif
 
 #           ifdef CR_STREAMING
-            CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG, g_FC_Var_1PG,
-                                         dt, dh, &EoS, &MicroPhy );
+            CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG,
+                                         dt, dh, &MicroPhy );
 
 //          NOTE: no opacity update here; Athena++'s end-of-stage-2 DefaultOpacity call corresponds to
 //                the CR_UpdateOpacity() call at the beginning of the NEXT step (step 1-a-1), which
@@ -965,7 +961,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 {
 
    const int  didx_flux[3] = { 1, N_HF_FLUX, SQR(N_HF_FLUX) };
-#  if ( defined COSMIC_RAY  ||  defined CR_STREAMING )
+#  if ( defined COSMIC_RAY )
    const int  didx_in[3]   = { 1, FLU_NXT, SQR(FLU_NXT) };
 #  endif
    const real dt_dh2       = (real)0.5*dt/dh;
@@ -1046,8 +1042,8 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
       MHD_GetCellCenteredBField( B_n, g_FC_B_In[0], g_FC_B_In[1], g_FC_B_In[2],
                                  FLU_NXT, FLU_NXT, FLU_NXT, i_in, j_in, k_in );
 
-      CR_TwoMomentSource_HalfStep( out_con, g_ConVar_In, g_Flux_Half, B_n, idx_in, didx_in,
-                                   idx_flux, didx_flux, dt, dh, EoS, MicroPhy );
+      CR_TwoMomentSource_HalfStep( out_con, g_ConVar_In, g_Flux_Half, B_n, idx_in,
+                                   idx_flux, didx_flux, dt, dh, MicroPhy );
 #     endif
 
 //    apply density and internal energy floors

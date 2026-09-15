@@ -1947,8 +1947,8 @@ void Aux_Check_Parameter()
 #     error : ERROR : CR_TWOMOMENT currently only supports the MHM_RP fluid scheme !!
 #  endif
 
-#  if ( EOS != EOS_GAMMA  &&  EOS != EOS_COSMIC_RAY )
-#     error : ERROR : CR_TWOMOMENT must use EOS_GAMMA (standalone) or EOS_COSMIC_RAY !!
+#  if ( EOS != EOS_GAMMA )
+#     error : ERROR : CR_TWOMOMENT must use EOS_GAMMA !!
 #  endif
 
 #  ifdef DUAL_ENERGY

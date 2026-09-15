@@ -382,8 +382,7 @@ extern InterpolationHandler Int_InterpolationHandler;
 
 // (2-13) cosmic ray
 // =======================================================================================================
-// GAMMA_CR (CR adiabatic index) is shared by the classic (COSMIC_RAY) and two-moment (CR_TWOMOMENT) modules
-#if ( defined COSMIC_RAY  ||  defined CR_TWOMOMENT )
+#ifdef COSMIC_RAY
 extern double GAMMA_CR;
 #endif
 #ifdef COSMIC_RAY

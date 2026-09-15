@@ -24,7 +24,7 @@ END_STEP                     -1           # end step (<0=auto -> must be set by 
 
 
 # test problems
-TESTPROB_ID                   24          # test problem ID [0]
+TESTPROB_ID                   26          # test problem ID [0]
                                           #    0: none
                                           #    1: HYDRO blast wave [+MHD]
                                           #    2: HYDRO acoustic wave
@@ -45,6 +45,7 @@ TESTPROB_ID                   24          # test problem ID [0]
                                           #   20: HYDRO MHD Cosmic Ray
                                           #   21: HYDRO MHD Cosmic Ray Shocktube
                                           #   23: HYDRO MHD Cosmic Ray Diffusion
+                                          #   26: HYDRO MHD Cosmic Ray Two-Moment
                                           # 1000: ELBDM external potential (+GRAVITY)
 
 

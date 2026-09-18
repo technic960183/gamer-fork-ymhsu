@@ -384,8 +384,6 @@ extern InterpolationHandler Int_InterpolationHandler;
 // =======================================================================================================
 #ifdef COSMIC_RAY
 extern double GAMMA_CR;
-#endif
-#ifdef COSMIC_RAY
 extern bool   OPT__FLAG_CRAY, OPT__FLAG_LOHNER_CRAY;
 extern double FlagTable_CRay[NLEVEL-1];
 #endif

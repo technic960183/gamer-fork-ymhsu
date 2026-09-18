@@ -200,19 +200,14 @@
 // cosmic rays
 # ifdef COSMIC_RAY
 #  define NCOMP_PASSIVE_BUILTIN1    1
+# elif defined CR_TWOMOMENT
+#  define NCOMP_PASSIVE_BUILTIN1    8
 # else
 #  define NCOMP_PASSIVE_BUILTIN1    0
 # endif
 
-// cosmic ray streaming
-# ifdef CR_TWOMOMENT
-#  define NCOMP_PASSIVE_BUILTIN2    8
-# else
-#  define NCOMP_PASSIVE_BUILTIN2    0
-# endif
-
 // total number of built-in scalars
-#  define NCOMP_PASSIVE_BUILTIN     ( NCOMP_PASSIVE_BUILTIN0 + NCOMP_PASSIVE_BUILTIN1 + NCOMP_PASSIVE_BUILTIN2 )
+#  define NCOMP_PASSIVE_BUILTIN     ( NCOMP_PASSIVE_BUILTIN0 + NCOMP_PASSIVE_BUILTIN1 )
 
 #endif // #if ( MODEL == HYDRO )
 
@@ -454,13 +449,6 @@
 
 # ifdef COSMIC_RAY
 #  define _FLUX_CRAY          ( 1L << FLUX_CRAY )
-# endif
-
-# ifdef CR_TWOMOMENT
-#  define _FLUX_CR_E          ( 1L << FLUX_CR_E )
-#  define _FLUX_CR_F1         ( 1L << FLUX_CR_F1 )
-#  define _FLUX_CR_F2         ( 1L << FLUX_CR_F2 )
-#  define _FLUX_CR_F3         ( 1L << FLUX_CR_F3 )
 # endif
 
 #endif // #if ( NFLUX_PASSIVE > 0 )
@@ -706,11 +694,7 @@
 #     define FLU_GHOST_SIZE         ( 1 + LR_GHOST_SIZE )
 #  elif ( FLU_SCHEME == MHM_RP )
 #    ifdef CR_TWOMOMENT
-//    one extra ghost layer so that the outermost ADV_* ghost ring -- which CR_UpdateOpacity()
-//    cannot recompute (no +/-1 neighbors) and therefore keeps stale ghost-filled values --
-//    lies outside the stencil of every PS2 output cell
-//    --> makes the per-patch opacity recomputation equivalent to a global one
-//        (patch-size-independent results, matching Athena++'s per-meshblock recomputation)
+//    one extra ghost layer for the outermost ADV_* in CR_UpdateOpacity()
 #     define FLU_GHOST_SIZE         ( 3 + LR_GHOST_SIZE )
 #    else
 #     define FLU_GHOST_SIZE         ( 2 + LR_GHOST_SIZE )

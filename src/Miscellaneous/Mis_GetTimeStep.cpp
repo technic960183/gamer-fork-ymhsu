@@ -236,7 +236,7 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 #  endif
 
 
-// 1.10 CRITERION TEN : cosmic ray streaming reduced speed of light
+// 1.10 CRITERION TEN : cosmic ray streaming reduced speed of light (MIGHT BE REDUNDANT WITH CRITERION ONE??)
 // =============================================================================================================
 // the gas-aware criterion CR_CFL*dh/max(|v|+c_fast, CR_VMAX), which matches Athena's dt semantics,
 // is folded into CRITERION ONE (see CPU_dtSolver_HydroCFL.cpp); the flat criterion below is redundant

@@ -281,8 +281,6 @@ void Init_Load_Parameter()
 #  endif
 
 // cosmic ray
-// --> GAMMA_CR is used only by the classic (COSMIC_RAY) module
-//     the two-moment (CR_TWOMOMENT) module hardcodes P_cr = E_cr/3 (i.e., gamma_cr = 4/3)
 #  ifdef COSMIC_RAY
    ReadPara->Add( "GAMMA_CR",                   &GAMMA_CR,                        4.0/3.0,         1.0,           NoMax_double   );
 #  endif

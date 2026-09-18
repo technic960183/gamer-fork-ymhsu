@@ -189,10 +189,12 @@ static void CR_UpdateStreaming_OneCell( const real Ec, const real rho,
 // Note        : 1. Loops over interior cells and calls CR_UpdateStreaming_OneCell() for each
 //               2. Works for both half-step and full-step by using appropriate parameters
 //               3. Invoked only after flux calculation with grad_pc computed from flux divergence
+//               4. Both callers currently pass the same array (with the same stride and offset) as
+//                  g_Output and g_CellVar; the separate input/output parameters are kept for a
+//                  future dedicated ADV_* buffer
 //
 // Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
 //               g_CellVar    : Array storing cell-centered variables (for reading rho, Ec)
-//                              If NULL, read from g_Output
 //               g_CC_B       : Array storing cell-centered B field [3][ CUBE(N) ]
 //               g_Flux       : Array storing fluxes [][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ]
 //               NFlux        : Stride for accessing g_Flux[] (N_HF_FLUX or N_FL_FLUX)
@@ -221,11 +223,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
    const real _dh  = (real)1.0 / dh;
    const int  didx_flux[3] = { 1, NFlux, SQR(NFlux) };
    const int  CRF_v[3] = { CR_F1, CR_F2, CR_F3 };
-   
-   // determine input array: use g_CellVar if provided, else g_Output
-   const real (*g_Input)[CUBE(FLU_NXT)] = ( g_CellVar != NULL ) ? g_CellVar : g_Output;
-   
-   // loop bounds
+
+// loop bounds
    const int cell_offset  = 1;  // skip boundary cells
    const int cell_size_i  = NFlux - 2*cell_offset;
    const int cell_size_j  = NFlux - 2*cell_offset;
@@ -264,8 +263,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
          grad_pc[n] *= _dh / vmax;
       }
 
-      const real Ec  = g_Input[CR_E ][idx_in];
-      const real rho = g_Input[DENS][idx_in];
+      const real Ec  = g_CellVar[CR_E ][idx_in];
+      const real rho = g_CellVar[DENS][idx_in];
       const real Bx  = g_CC_B[0][idx_B];
       const real By  = g_CC_B[1][idx_B];
       const real Bz  = g_CC_B[2][idx_B];
@@ -302,8 +301,8 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 //                  DENS, CR_E, and ADV_* are accessed, which are identical in the two
 //                  representations (CR passive fields are not converted by Hydro_Con2Pri())
 //
-// Parameter   : g_Output     : Flat pointer to the output array for updated opacity
-//               OutStride    : Stride between variables in g_Output (CUBE(FLU_NXT) or CUBE(PS2))
+// Parameter   : g_Output     : Array to store the updated opacity (ADV_SIGMA, ADV_VX, ADV_VY, ADV_VZ)
+//                              --> also the input array for DENS and CR_E
 //               g_CC_B       : Array storing cell-centered B field [3][ CUBE(N) ]
 //               NVar_Out     : Size for computing output indices (FLU_NXT, N_HF_VAR, or PS2)
 //               NVar_In      : Size for computing input indices for neighbor access
@@ -319,8 +318,7 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 // Reference   : Athena++ src/cr/cr.cpp DefaultOpacity()
 //-------------------------------------------------------------------------------------------------------
 GPU_DEVICE
-void CR_UpdateOpacity( real *g_Output,
-                       const int OutStride,
+void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
                        const real g_CC_B[][ CUBE(FLU_NXT) ],
                        const int NVar_Out, const int NVar_In, const int NVar_B,
                        const int out_offset, const int in_offset, const int NSize,
@@ -365,13 +363,13 @@ void CR_UpdateOpacity( real *g_Output,
 //    compute grad(Pc) using central differences
 //    Pc = Ec / 3, so grad(Pc) = (1/3) * grad(Ec)
       real grad_pc[3];
-      grad_pc[0] = ( g_Output[CR_E*OutStride + idx_ip1] - g_Output[CR_E*OutStride + idx_im1] ) / (real)3.0 * _2dh;
-      grad_pc[1] = ( g_Output[CR_E*OutStride + idx_jp1] - g_Output[CR_E*OutStride + idx_jm1] ) / (real)3.0 * _2dh;
-      grad_pc[2] = ( g_Output[CR_E*OutStride + idx_kp1] - g_Output[CR_E*OutStride + idx_km1] ) / (real)3.0 * _2dh;
+      grad_pc[0] = ( g_Output[CR_E][idx_ip1] - g_Output[CR_E][idx_im1] ) / (real)3.0 * _2dh;
+      grad_pc[1] = ( g_Output[CR_E][idx_jp1] - g_Output[CR_E][idx_jm1] ) / (real)3.0 * _2dh;
+      grad_pc[2] = ( g_Output[CR_E][idx_kp1] - g_Output[CR_E][idx_km1] ) / (real)3.0 * _2dh;
 
 //    get cell-centered values
-      const real Ec  = g_Output[CR_E*OutStride + idx_in];
-      const real rho = g_Output[DENS*OutStride + idx_in];
+      const real Ec  = g_Output[CR_E][idx_in];
+      const real rho = g_Output[DENS][idx_in];
       const real Bx = g_CC_B[0][idx_B];
       const real By = g_CC_B[1][idx_B];
       const real Bz = g_CC_B[2][idx_B];
@@ -410,10 +408,10 @@ void CR_UpdateOpacity( real *g_Output,
          sigma_adv = MicroPhy->CR_max_opacity;
       }
 
-      g_Output[ADV_SIGMA*OutStride + idx_out] = sigma_adv;
-      g_Output[ADV_VX   *OutStride + idx_out] = v_adv[0];
-      g_Output[ADV_VY   *OutStride + idx_out] = v_adv[1];
-      g_Output[ADV_VZ   *OutStride + idx_out] = v_adv[2];
+      g_Output[ADV_SIGMA][idx_out] = sigma_adv;
+      g_Output[ADV_VX   ][idx_out] = v_adv[0];
+      g_Output[ADV_VY   ][idx_out] = v_adv[1];
+      g_Output[ADV_VZ   ][idx_out] = v_adv[2];
 
    } // CGPU_LOOP
 

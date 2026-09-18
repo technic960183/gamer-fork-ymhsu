@@ -325,7 +325,6 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
                        const real dh, const MicroPhy_t *MicroPhy )
 {
    const real vmax   = MicroPhy->CR_vmax;
-   const real invlim = (real)1.0 / vmax;
    const real _2dh   = (real)0.5 / dh;
 
    const int size_ij = NSize * NSize;
@@ -368,45 +367,16 @@ void CR_UpdateOpacity( real g_Output[][ CUBE(FLU_NXT) ],
       grad_pc[2] = ( g_Output[CR_E][idx_kp1] - g_Output[CR_E][idx_km1] ) / (real)3.0 * _2dh;
 
 //    get cell-centered values
-      const real Ec  = g_Output[CR_E][idx_in];
+      const real Ec  = g_Output[CR_E ][idx_in];
       const real rho = g_Output[DENS][idx_in];
-      const real Bx = g_CC_B[0][idx_B];
-      const real By = g_CC_B[1][idx_B];
-      const real Bz = g_CC_B[2][idx_B];
-      
-      const real bsq  = SQR(Bx) + SQR(By) + SQR(Bz);
-      const real btot = SQRT( bsq );
-      const real inv_sqrt_rho = (real)1.0 / SQRT( rho );
-      const real va = btot * inv_sqrt_rho;  // Alfven velocity
+      const real Bx  = g_CC_B[0][idx_B];
+      const real By  = g_CC_B[1][idx_B];
+      const real Bz  = g_CC_B[2][idx_B];
 
-//    compute B dot grad(Pc)
-      const real b_grad_pc = Bx * grad_pc[0] + By * grad_pc[1] + Bz * grad_pc[2];
-
-//    determine sign of B dot grad(Pc)
-      real dpc_sign = (real)0.0;
-      if ( b_grad_pc > TINY_NUMBER )
-         dpc_sign = (real)1.0;
-      else if ( -b_grad_pc > TINY_NUMBER )
-         dpc_sign = (real)-1.0;
-
-//    compute streaming velocity: v_adv = -sign(B dot grad Pc) * v_Alfven * b_hat
-      const real va1 = Bx * inv_sqrt_rho;
-      const real va2 = By * inv_sqrt_rho;
-      const real va3 = Bz * inv_sqrt_rho;
-
-      real v_adv[3];
-      v_adv[0] = -va1 * dpc_sign;
-      v_adv[1] = -va2 * dpc_sign;
-      v_adv[2] = -va3 * dpc_sign;
-
-//    compute streaming opacity (parallel to B)
-//    sigma_adv = |B dot grad Pc| / (|B| * v_A * (4/3) * (1/vmax) * Ec)
+//    compute new sigma_adv and v_adv
       real sigma_adv;
-      if ( va > TINY_NUMBER && Ec > TINY_NUMBER ) {
-         sigma_adv = FABS(b_grad_pc) / ( btot * va * ((real)4.0/(real)3.0) * invlim * Ec );
-      } else {
-         sigma_adv = MicroPhy->CR_max_opacity;
-      }
+      real v_adv[3];
+      CR_UpdateStreaming_OneCell( Ec, rho, Bx, By, Bz, grad_pc, vmax, sigma_adv, v_adv, MicroPhy );
 
       g_Output[ADV_SIGMA][idx_out] = sigma_adv;
       g_Output[ADV_VX   ][idx_out] = v_adv[0];

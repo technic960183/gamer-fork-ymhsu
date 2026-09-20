@@ -530,11 +530,11 @@ COMMONFLAG := $(INCLUDE) $(SIMU_OPTION)
 CXXFLAG    += $(COMMONFLAG) $(OPENMPFLAG)
 
 # grep git information
-GIT_INFO    :=
-GIT_FAIL    := $(shell git rev-parse 2>&1 | cat)
-ifeq "$(GIT_FAIL)" ""
-   GIT_INFO += -DGIT_COMMIT="`git rev-parse HEAD`"              # commit
-   GIT_INFO += -DGIT_BRANCH="`git rev-parse --abbrev-ref HEAD`" # branch
+GAMER_GIT_ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))..)
+GIT_INFO       :=
+ifneq "$(wildcard $(GAMER_GIT_ROOT)/.git)" ""
+   GIT_INFO += -DGIT_COMMIT="`git -C $(GAMER_GIT_ROOT) rev-parse HEAD`"              # commit
+   GIT_INFO += -DGIT_BRANCH="`git -C $(GAMER_GIT_ROOT) rev-parse --abbrev-ref HEAD`" # branch
 else
    GIT_INFO += -DGIT_COMMIT="N/A"
    GIT_INFO += -DGIT_BRANCH="N/A"

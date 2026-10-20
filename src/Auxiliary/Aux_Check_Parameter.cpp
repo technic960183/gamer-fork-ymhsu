@@ -1954,7 +1954,7 @@ void Aux_Check_Parameter()
 #  endif
 
 #  if ( EOS != EOS_GAMMA )
-#     error : ERROR : CR_TWOMOMENT must use EOS_GAMMA !!
+#     error : ERROR : CR_TWOMOMENT must use EOS_GAMMA !! CR pressure is handled by the two-moment source term
 #  endif
 
 #  ifdef DUAL_ENERGY
@@ -1981,7 +1981,7 @@ void Aux_Check_Parameter()
 
 //    see CPU_dtSolver_HydroCFL() in CPU_dtSolver_HydroCFL.cpp
       if ( CR_CFL > DT__FLUID )
-         Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) > DT__FLUID (%14.7e) will not be"
+         Aux_Message( stderr, "WARNING : CR_CFL (%14.7e) > DT__FLUID (%14.7e) will not be "
                               "good when gas speeds exceed CR_VMAX !!\n", CR_CFL, DT__FLUID );
 
    } // if ( MPI_Rank == 0 )

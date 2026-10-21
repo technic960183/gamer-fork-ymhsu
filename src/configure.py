@@ -704,7 +704,7 @@ def load_arguments( sys_setting : SystemSetting ):
     parser.add_argument( "--cr_two_moment", type=str2bool, metavar="BOOLEAN", gamer_name="CR_TWOMOMENT",
                          default=False,
                          constraint={ True:{"mhd":True, "eos":["GAMMA"]} },
-                         help="Enable cosmic-ray with two-moment method. Must enable <--mhd> and <--eos=GAMMA>."
+                         help="Enable cosmic-ray two-moment method. Must enable <--mhd> and <--eos=GAMMA>.\n"
                        )
 
     # B. miscellaneous options

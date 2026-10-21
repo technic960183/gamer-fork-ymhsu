@@ -5,13 +5,12 @@
 
 //-------------------------------------------------------------------------------------------------------
 // Function    :  Flag_CR_Streaming
-// Description :  User-defined flag criterion: a static, hollow spherical shell centred on the box centre
+// Description :  Flag cells within a spherical shell around the box center
 //
 // Note        :  1. Invoked by Flag_Check() using the function pointer "Flag_User_Ptr",
 //                   which must be set by a test problem initializer
 //                2. Enabled by the runtime option "OPT__FLAG_USER" with "OPT__FLAG_USER_NUM 2"
-//                3. The criterion depends only on position --> the refinement hierarchy built at t=0
-//                   is reproduced identically at every regrid and therefore never changes in time
+//                3. Depends only on position --> static refinement hierarchy
 //                4. Set Threshold[1] <= Threshold[0] on a given level to disable refinement there
 //
 // Parameter   :  i,j,k     : Indices of the target element in the patch ptr[ amr->FluSg[lv] ][lv][PID]
@@ -37,7 +36,6 @@ bool Flag_CR_Streaming( const int i, const int j, const int k, const int lv, con
    const double R_in   = Threshold[0];
    const double R_out  = Threshold[1];
 
-// an empty or inverted radius range disables refinement on this level
    if ( R_out <= R_in )    return false;
 
    bool Flag = ( Radius >= R_in  &&  Radius < R_out );

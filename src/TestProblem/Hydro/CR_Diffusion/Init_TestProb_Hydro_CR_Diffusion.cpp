@@ -234,13 +234,7 @@ void SetParameter()
    if ( CR_Diffusion_CenterZ < 0.0 )  CR_Diffusion_CenterZ = 0.5*amr->BoxSize[2];
 
 // (1-3) check the runtime parameters
-// --> Type 0/3 (Gaussian ball/plane, uniform B) are allowed to run for the two-moment-vs-classic
-//     comparison (CR_Classic_Diffusion): the gas is kept static via a
-//     large background pressure instead of being explicitly fixed, so CRay diffuses cleanly.
-// --> Type 1 (step ring, Jiang & Oh 2018 Sec 4.1.5 / Tseng et al. 2024 Fig 19) is allowed when the gas is kept
-//     quasi-static with a very inert background (large CR_Diffusion_Rho0): the circular field B=(-y/r,x/r)/|MagX|
-//     carries an unbalanced hoop stress (tension -B^2/r r^, not pressure-balanceable) that would otherwise
-//     implode the gas at the field vortex and compress a spurious CR peak at r=0 (a = B^2/(r*rho))
+// --> Type 1 requires a large CR_Diffusion_Rho0 to keep the gas quasi-static under the hoop stress of the circular B field
    if ( CR_Diffusion_Type == 1  &&  CR_Diffusion_Rho0 < 1.0e6 )
       Aux_Error( ERROR_INFO, "CR_Diffusion_Type = 1 (ring) requires a quasi-static gas: set CR_Diffusion_Rho0 >= 1e6 "
                              "to suppress the circular-B hoop-stress implosion (got %13.7e) !!\n", CR_Diffusion_Rho0 );

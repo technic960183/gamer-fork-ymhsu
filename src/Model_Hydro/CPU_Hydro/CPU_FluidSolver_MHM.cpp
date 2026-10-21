@@ -39,7 +39,6 @@
 # include "../../Microphysics/CosmicRayDiffusion/CUFLU_CR_AddDiffuseFlux.cu"
 #endif
 #endif // #ifdef COSMIC_RAY
-// CR_TWOMOMENT (two-moment) is a standalone module and does NOT require COSMIC_RAY
 #ifdef CR_TWOMOMENT
 # include "CUFLU_CR_TwoMoment.cu"
 #endif
@@ -156,7 +155,6 @@ void CR_AddDiffuseFlux_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
                                  const int NFlux, const real dh, const MicroPhy_t *MicroPhy );
 #endif // #ifdef CR_DIFFUSION
 #endif // #ifdef COSMIC_RAY
-// CR_TWOMOMENT (two-moment) is a standalone module and does NOT require COSMIC_RAY
 #ifdef CR_TWOMOMENT
 void CR_TwoMomentFlux_HalfStep( const real g_ConVar[][ CUBE(FLU_NXT) ],
                                   real g_Flux_Half[][NCOMP_TOTAL_PLUS_MAG][ CUBE(N_FC_FLUX) ],
@@ -241,9 +239,7 @@ static void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 //
 //
 // Parameter   :  g_Flu_Array_In     : Array storing the input fluid variables
-//                                     --> non-const under CR_TWOMOMENT: the ADV_* work-array rows are
-//                                         updated in place during the half step because no other ghost-padded
-//                                         array persisting through the full step is available
+//                                     --> Non-const for CR_TWOMOMENT since ADV_* are updated in place
 //                g_Flu_Array_Out    : Array to store the output fluid variables
 //                g_Mag_Array_In     : Array storing the input B field (for MHD only)
 //                g_Mag_Array_Out    : Array to store the output B field (for MHD only)
@@ -485,10 +481,8 @@ void CPU_FluidSolver_MHM(
 #        endif // #ifdef MHD
 
 #        ifdef CR_TWOMOMENT
-//       update opacity before half-step flux computation
-//       Uses CENTRAL DIFFERENCE grad(Pc) - requires ±1 neighbors
-//       output: g_Flu_Array_In[P], input: same array, B from g_PriVar_1PG+MAG_OFFSET
-//       --> writes the ADV_* rows of the input array in place (see the function header)
+//       update ADV_* for the half-step CR fluxes
+//       --> g_Flu_Array_In[P] is updated in place
          CR_UpdateOpacity( g_Flu_Array_In[P],
                            g_PriVar_1PG+MAG_OFFSET,
                            FLU_NXT, FLU_NXT, FLU_NXT, 1, 1, FLU_NXT-2, dh, &MicroPhy );
@@ -511,8 +505,7 @@ void CPU_FluidSolver_MHM(
 #        ifdef CR_TWOMOMENT
          CR_TwoMomentFlux_HalfStep( g_Flu_Array_In[P], g_Flux_Half_1PG, g_PriVar_1PG+MAG_OFFSET, dh, &MicroPhy );
 
-//       update streaming velocity/opacity after half-step flux computation (DefaultStreaming)
-//       output: g_Flu_Array_In[P], input: same array, B from g_PriVar_1PG+MAG_OFFSET
+//       update ADV_* for the half-step CR source term
 #        ifdef __CUDACC__
          __syncthreads();
 #        endif
@@ -561,11 +554,8 @@ void CPU_FluidSolver_MHM(
 
 
 #           ifdef CR_TWOMOMENT
-//          restore ADV_* in g_PriVar_Half_1PG[] before a retry: the previous iteration's
-//          CR_UpdateStreaming() overwrote them in-place with DefaultStreaming values;
-//          CR_UpdateOpacity() reads only DENS/CR_E/B, none of which are written inside this
-//          loop, so it regenerates bitwise the values the first iteration saw
-//          (same call as at the end of Hydro_RiemannPredict())
+//          restore ADV_* overwritten by CR_UpdateStreaming() in the previous iteration
+//          --> same call as at the end of Hydro_RiemannPredict(); its inputs are not modified in this loop
             if ( Iteration > 0 )
             {
                CR_UpdateOpacity( g_PriVar_Half_1PG,
@@ -640,8 +630,7 @@ void CPU_FluidSolver_MHM(
             CR_TwoMomentFlux_FullStep( g_FC_Var_1PG, g_PriVar_Half_1PG, g_FC_Flux_1PG,
                                        N_FL_FLUX, NSkip_N, NSkip_T, dh, &MicroPhy );
 
-//          update streaming velocity/opacity after full-step flux computation (DefaultStreaming)
-//          output: g_PriVar_Half_1PG, input: same array, B from g_PriVar_Half_1PG[MAG_OFFSET+*]
+//          update ADV_* for the full-step CR source term
 #           ifdef __CUDACC__
             __syncthreads();
 #           endif
@@ -667,9 +656,7 @@ void CPU_FluidSolver_MHM(
 #           if ( FLU_SCHEME == MHM )
             const int OffsetPri = 0;
 #           else
-//          offset between the flux/electric-field indices and g_PriVar_Half[];
-//          equals LR_GHOST_SIZE unless g_PriVar_Half[] carries extra ghost layers
-//          (currently only CR_TWOMOMENT, which widens FLU_GHOST_SIZE by one --> see Macro.h)
+//          = LR_GHOST_SIZE, or LR_GHOST_SIZE+1 for CR_TWOMOMENT (see FLU_GHOST_SIZE in Macro.h)
             const int OffsetPri = ( N_HF_VAR - N_FC_VAR ) / 2;
 #           endif
 
@@ -695,13 +682,11 @@ void CPU_FluidSolver_MHM(
                                        dt, dh, &EoS );
 #           endif
 
+//          add the two-moment cosmic-ray source term
+//          --> no CR_UpdateOpacity() afterward since it is invoked at the beginning of the next step
 #           ifdef CR_TWOMOMENT
             CR_TwoMomentSource_FullStep( g_PriVar_Half_1PG, g_Flu_Array_Out[P], g_FC_Flux_1PG,
                                          dt, dh, &MicroPhy );
-
-//          NOTE: no opacity update here; Athena++'s end-of-stage-2 DefaultOpacity call corresponds to
-//                the CR_UpdateOpacity() call at the beginning of the NEXT step (step 1-a-1), which
-//                operates on the ghost-filled input data of that step
 #           endif
 
 
@@ -937,9 +922,7 @@ void Hydro_RiemannPredict_Flux( const real g_ConVar[][ CUBE(FLU_NXT) ],
 //                3. Cell-centered B field is simply obtained by averaging the half-step face-centered B field
 //
 // Parameter   :  g_ConVar_In        : Array storing the input conserved variables
-//                g_FC_B_In          : Array storing the input t^n face-centered B field
-//                                     --> Used only by CR_TWOMOMENT to recompute the t^n cell-centered B
-//                                         for the half-step CR source term (see below)
+//                g_FC_B_In          : Array storing the input face-centered B field (for CR_TWOMOMENT only)
 //                g_FC_B_Half        : Array storing the input half-step face-centered B field
 //                g_Flux_Half        : Array storing the input face-centered fluxes
 //                                     --> Accessed with the stride N_HF_FLUX
@@ -972,7 +955,7 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 {
 
    const int  didx_flux[3] = { 1, N_HF_FLUX, SQR(N_HF_FLUX) };
-#  if ( defined COSMIC_RAY )
+#  ifdef COSMIC_RAY
    const int  didx_in[3]   = { 1, FLU_NXT, SQR(FLU_NXT) };
 #  endif
    const real dt_dh2       = (real)0.5*dt/dh;
@@ -1026,9 +1009,6 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 
 
 //    compute the cell-centered half-step B field
-//    --> required by the energy floor (Emag) below and stored in g_PriVar_Half[] at the end of the loop
-//    --> note that CR_TwoMomentSource_HalfStep() deliberately does NOT read out_con[MAG_OFFSET+MAGX/Y/Z];
-//        it uses the t^n cell-centered B (B_n[] below) instead
 #     ifdef MHD
       MHD_GetCellCenteredBField( out_con+MAG_OFFSET, g_FC_B_Half[0], g_FC_B_Half[1], g_FC_B_Half[2],
                                  N_HF_VAR, N_HF_VAR, N_HF_VAR, i_out, j_out, k_out );
@@ -1041,14 +1021,8 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
 #     endif
 
 #     ifdef CR_TWOMOMENT
-//    t^n cell-centered B field for the half-step CR source term: Athena++'s stage-1 source uses
-//    b_angle computed from the t^n bcc (set by the previous step's CRTC_OPACITY), NOT the CT
-//    half-step B stored in out_con[MAG_OFFSET+*] above
-//    --> recomputed from the t^n face-centered B because g_PriVar[MAG_OFFSET+*] (filled in step
-//        1-a-1) aliases g_PriVar_Half[], which this loop is concurrently overwriting with a
-//        different stride --> reading it here would race with other cells/threads
-//    --> bitwise identical to the t^n cell-centered B used by the half-step fluxes (same input
-//        array, same averaging); MHD is compile-enforced for CR_TWOMOMENT (Aux_Check_Parameter.cpp)
+//    add the two-moment cosmic-ray source term with the t^n cell-centered B field
+//    --> recompute B_n[] since g_PriVar[MAG_OFFSET+*] of step 1-a-1 aliases g_PriVar_Half[], which this loop overwrites
       real B_n[NCOMP_MAG];
       MHD_GetCellCenteredBField( B_n, g_FC_B_In[0], g_FC_B_In[1], g_FC_B_In[2],
                                  FLU_NXT, FLU_NXT, FLU_NXT, i_in, j_in, k_in );
@@ -1093,13 +1067,11 @@ void Hydro_RiemannPredict( const real g_ConVar_In[][ CUBE(FLU_NXT) ],
    } // i,j,k
 
 
-//  update opacity after half-step source computation (DefaultOpacity)
-//  output: g_PriVar_Half, input: same array for Ec neighbors, B from g_PriVar_Half[MAG_OFFSET+*]
+// update ADV_* of the half-step solution for the full-step CR fluxes
 #  ifdef CR_TWOMOMENT
 #  ifdef __CUDACC__
    __syncthreads();
 #  endif
-// NSize=N_HF_VAR-2 (interior cells), out_offset=1 (skip boundary), in_offset=1
    CR_UpdateOpacity( g_PriVar_Half,
                      g_PriVar_Half+MAG_OFFSET,
                      N_HF_VAR, N_HF_VAR, N_HF_VAR, 1, 1, N_HF_VAR-2, dh, MicroPhy );

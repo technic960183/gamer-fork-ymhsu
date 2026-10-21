@@ -238,10 +238,8 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 
 // 1.10 CRITERION TEN : cosmic ray streaming reduced speed of light (MIGHT BE REDUNDANT WITH CRITERION ONE??)
 // =============================================================================================================
-// the gas-aware criterion CR_CFL*dh/max(|v|+c_fast, CR_VMAX), which matches Athena's dt semantics,
-// is folded into CRITERION ONE (see CPU_dtSolver_HydroCFL.cpp); the flat criterion below is redundant
-// with it (always >= it) and is kept only as a fallback because OPT__FREEZE_FLUID resets CRITERION ONE
-// to HUGE_NUMBER, which would otherwise leave CR streaming without any dt limit
+// --> always >= the CR criterion CR_CFL*dh/max(|v|+c_fast, CR_VMAX) in CRITERION ONE (see CPU_dtSolver_HydroCFL.cpp)
+// --> not required for OPT__FREEZE_FLUID either since it also freezes CRs (dt = 0 in InvokeSolver.cpp)
 #  ifdef CR_TWOMOMENT
    dTime[NdTime] = dTime_dt * MicroPhy.CR_cfl * amr->dh[lv] / MicroPhy.CR_vmax;
    sprintf( dTime_Name[NdTime++], "%s", "CR_Stream" );

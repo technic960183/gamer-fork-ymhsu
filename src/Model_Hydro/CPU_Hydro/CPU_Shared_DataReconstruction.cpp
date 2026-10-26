@@ -210,9 +210,7 @@ void Hydro_DataReconstruction( const real g_ConVar   [][ CUBE(FLU_NXT) ],
 #  else
 #  error : ERROR : unsupported FLU_SCHEME !!
 #  endif
-// offset between g_FC_Var[] and the input array (i.e., the input cells not reconstructed on each side);
-// equals LR_GHOST_SIZE unless the input region carries extra ghost layers beyond the reconstruction
-// stencil (currently only MHM_RP + CR_TWOMOMENT, which widens FLU_GHOST_SIZE by one --> see Macro.h)
+// NGhost = LR_GHOST_SIZE, or LR_GHOST_SIZE+1 for CR_TWOMOMENT (see FLU_GHOST_SIZE in Macro.h)
    const int NGhost = ( NIn - N_FC_VAR ) / 2;
 
 
@@ -728,9 +726,7 @@ void Hydro_DataReconstruction( const real g_ConVar   [][ CUBE(FLU_NXT) ],
 #  else
 #  error : ERROR : unsupported FLU_SCHEME !!
 #  endif
-// offset between g_FC_Var[] and the input array (i.e., the input cells not reconstructed on each side);
-// equals LR_GHOST_SIZE unless the input region carries extra ghost layers beyond the reconstruction
-// stencil (currently only MHM_RP + CR_TWOMOMENT, which widens FLU_GHOST_SIZE by one --> see Macro.h)
+// NGhost = LR_GHOST_SIZE, or LR_GHOST_SIZE+1 for CR_TWOMOMENT (see FLU_GHOST_SIZE in Macro.h)
    const int NGhost = ( NIn - N_FC_VAR ) / 2;
 
 

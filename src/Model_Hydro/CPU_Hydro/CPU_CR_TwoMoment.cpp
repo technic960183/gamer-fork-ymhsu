@@ -286,11 +286,12 @@ void CR_UpdateStreaming( real g_Output[][ CUBE(FLU_NXT) ],
 
 //-------------------------------------------------------------------------------------------------------
 // Function    : CR_UpdateOpacity
-// Description : Update streaming opacity and velocity using central difference CR pressure
+// Description : Update streaming opacity and velocity using the central-difference CR pressure gradient
 //
 // Note        : 1. Invoke CR_UpdateStreaming_OneCell()
 //               2. Invoked by CPU_FluidSolver_MHM() before the half-step flux and by Hydro_RiemannPredict()
 //                  after the half-step source term (for the full-step)
+//                  --> also invoked by CPU_FluidSolver_MHM() to restore ADV_* before a retry
 //               3. grad_pc is computed with central differences of CR pressure
 //               4. g_Output[] may be conserved (g_Flu_Array_In) or primitive (g_PriVar_Half): safe
 //                  because only DENS, CR_E, and ADV_* are accessed
@@ -916,6 +917,7 @@ void CR_TwoMomentSource_HalfStep( real OneCell[NCOMP_TOTAL_PLUS_MAG],
    CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
 
 // 5. compute the total velocity
+//    --> ADV_* in g_ConVar_In[] are set by CR_UpdateStreaming()
    const real v_adv_x = g_ConVar_In[ADV_VX][idx_in];
    const real v_adv_y = g_ConVar_In[ADV_VY][idx_in];
    const real v_adv_z = g_ConVar_In[ADV_VZ][idx_in];
@@ -1153,6 +1155,7 @@ void CR_TwoMomentSource_FullStep( const real g_PriVar_Half[][ CUBE(FLU_NXT) ],
       CR_ComputeBFieldAngles( Bx, By, Bz, sint, cost, sinp, cosp );
 
 //    5. compute the total velocity
+//       --> ADV_* in g_PriVar_Half[] are set by CR_UpdateStreaming()
       const real v_adv_x = g_PriVar_Half[ADV_VX][idx_pvar];
       const real v_adv_y = g_PriVar_Half[ADV_VY][idx_pvar];
       const real v_adv_z = g_PriVar_Half[ADV_VZ][idx_pvar];

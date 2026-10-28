@@ -1,5 +1,6 @@
 #include "GAMER.h"
 
+extern double Mis_GetTimeStep_ExactCooling( const int lv, const double dTime_dt );
 
 
 
@@ -236,7 +237,31 @@ double Mis_GetTimeStep( const int lv, const double dTime_SyncFaLv, const double 
 #  endif
 
 
-// 1.10 CRITERION TEN : cosmic ray streaming reduced speed of light (MIGHT BE REDUNDANT WITH CRITERION ONE??)
+// 1.10 CRITERION TEN : Grackle cooling time
+// =============================================================================================================
+#  ifdef SUPPORT_GRACKLE
+   if ( DT__GRACKLE_COOLING >= 0.0 ) {
+      dTime[NdTime] = dTime_dt * Grackle_GetTimeStep_CoolingTime( lv );
+      sprintf( dTime_Name[NdTime++], "%s", "Grackle_TCool" );
+
+//    when fluid is frozen, disable this criterion by resetting it to a huge value
+      if ( OPT__FREEZE_FLUID  &&  ! OPT__UNFREEZE_GRACKLE )   dTime[NdTime-1] = HUGE_NUMBER;
+   }
+#  endif
+
+
+// 1.11 CRITERION ELEVEN : exact-cooling source term
+// =============================================================================================================
+#  ifdef EXACT_COOLING
+   if ( SrcTerms.ExactCooling  &&  SrcTerms.EC_dtCoef >= 0.0 )
+   {
+      dTime[NdTime] = dTime_dt * Mis_GetTimeStep_ExactCooling( lv, dTime_dt );
+      sprintf( dTime_Name[NdTime++], "%s", "ExactCooling" );
+   }
+#  endif
+
+
+// 1.12 CRITERION TWELVE : cosmic ray streaming reduced speed of light (MIGHT BE REDUNDANT WITH CRITERION ONE??)
 // =============================================================================================================
 // --> always >= the CR criterion CR_CFL*dh/max(|v|+c_fast, CR_VMAX) in CRITERION ONE (see CPU_dtSolver_HydroCFL.cpp)
 // --> not required for OPT__FREEZE_FLUID either since it also freezes CRs (dt = 0 in InvokeSolver.cpp)

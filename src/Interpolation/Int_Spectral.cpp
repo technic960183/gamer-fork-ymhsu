@@ -385,7 +385,7 @@ void InterpolationContext::ReadBinaryFile( const char* filename, double* array, 
    FILE* file = fopen( filename, "rb" );
    if ( file == NULL ) {
       Aux_Error( ERROR_INFO, "Error opening interpolation file %s !!\n"
-                 "        --> See https://github.com/gamer-project/gamer/wiki/%5BELBDM%5D-Spectral-Interpolation#obtaining-interpolation-tables\n",
+                 "        --> See https://github.com/gamer-project/gamer/wiki/%%5BELBDM%%5D-Spectral-Interpolation#obtaining-interpolation-tables\n",
                  filename );
       return;
    }
@@ -831,7 +831,7 @@ size_t QuarticInterpolationContext::GetWorkspaceSize() const
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    :  QuadraticInterpolationContext::InterpolateReal
+// Function    :  QuarticInterpolationContext::InterpolateReal
 // Description :  Interpolate input array of size nInput and store interpolation results of size 2*(nInput - nGhostBoundary) in output array
 //
 // Parameter   :  input     : Real input  array of size nInput
@@ -890,7 +890,7 @@ size_t CQuarticInterpolationContext::GetWorkspaceSize() const
 
 
 //-------------------------------------------------------------------------------------------------------
-// Function    :  QuadraticInterpolationContext::InterpolateReal
+// Function    :  CQuarticInterpolationContext::InterpolateReal
 // Description :  Interpolate input array of size nInput and store interpolation results of size 2*(nInput - nGhostBoundary) in output array
 //
 // Parameter   :  input     : Real input  array of size nInput

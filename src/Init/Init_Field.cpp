@@ -160,6 +160,11 @@ void Init_Field()
    if ( Idx_CR_E  != CR_E  )    Aux_Error( ERROR_INFO, "inconsistent Idx_CR_E  (%d != %d) !!\n", Idx_CR_E,  CR_E  );
 #  endif
 
+#  ifdef EXACT_COOLING
+   Idx_TCool = AddField( "TCool", FIXUP_FLUX_NO, FIXUP_REST_NO, FLOOR_YES, NORMALIZE_NO, INTERP_FRAC_NO );
+   if ( Idx_TCool != TCOOL )    Aux_Error( ERROR_INFO, "inconsistent Idx_TCool (%d != %d) !!\n", Idx_TCool, TCOOL );
+#  endif
+
 #  ifdef COSMIC_RAY
    Idx_CRay = AddField( "CRay", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_YES, NORMALIZE_NO, INTERP_FRAC_NO );
    if ( Idx_CRay != CRAY )    Aux_Error( ERROR_INFO, "inconsistent Idx_CRay (%d != %d) !!\n", Idx_CRay, CRAY );
@@ -169,7 +174,6 @@ void Init_Field()
    Idx_Dual = AddField( "Dual", FIXUP_FLUX_YES, FIXUP_REST_YES, FLOOR_YES, NORMALIZE_NO, INTERP_FRAC_NO );
    if ( Idx_Dual != DUAL )    Aux_Error( ERROR_INFO, "inconsistent Idx_Dual (%d != %d) !!\n", Idx_Dual, DUAL );
 #  endif
-
 
 
 // 5. validate if all fields have been set properly

@@ -87,8 +87,8 @@ void Aux_Check_Parameter()
    if ( END_STEP < 0  &&  OPT__INIT != INIT_BY_RESTART )
       Aux_Error( ERROR_INFO, "incorrect parameter \"%s = %d\" [>=0] !!\n", "END_STEP", END_STEP );
 
-   if ( END_T < 0.0  &&  OPT__INIT != INIT_BY_RESTART )
-      Aux_Error( ERROR_INFO, "incorrect parameter \"%s = %14.7e\" [>=0] !!\n", "END_T", END_T );
+   if ( END_T < INIT_T  &&  OPT__INIT != INIT_BY_RESTART )
+      Aux_Error( ERROR_INFO, "incorrect parameter \"%s = %14.7e\" [>= INIT_T = %14.7e] !!\n", "END_T", END_T, INIT_T );
 
 #  ifndef LOAD_BALANCE
    if ( NX0_TOT[0]%(PS2*MPI_NRank_X[0]) != 0  ||  NX0_TOT[1]%(PS2*MPI_NRank_X[1]) != 0  ||
@@ -298,7 +298,11 @@ void Aux_Check_Parameter()
 #  ifdef SUPPORT_FFTW
    if ( OPT__FFTW_STARTUP != FFTW_STARTUP_ESTIMATE )
       Aux_Error( ERROR_INFO, "must set OPT__FFTW_STARTUP=0 (FFTW_STARTUP_ESTIMATE) for BITWISE_REPRODUCIBILITY !!\n" );
+
+#  if ( SUPPORT_FFTW == FFTW3  &&  defined SERIAL )
+      Aux_Message( stderr, "WARNING : SUPPORT_FFTW=FFTW3 + SERIAL may break BITWISE_REPRODUCIBILITY !!\n" );
 #  endif
+#  endif // #ifdef SUPPORT_FFTW
 #  endif // #ifdef BITWISE_REPRODUCIBILITY
 
 #  if ( !defined SERIAL  &&  !defined LOAD_BALANCE )
@@ -310,8 +314,13 @@ void Aux_Check_Parameter()
    {
       int NDerField = UserDerField_Num;
 #     if ( MODEL == HYDRO )
-      if ( OPT__OUTPUT_DIVVEL )  NDerField ++;
-      if ( OPT__OUTPUT_MACH   )  NDerField ++;
+      if ( OPT__OUTPUT_DIVVEL        )  NDerField ++;
+      if ( OPT__OUTPUT_MACH          )  NDerField ++;
+#     ifdef SUPPORT_GRACKLE
+      if ( OPT__OUTPUT_GRACKLE_TEMP  )  NDerField ++;
+      if ( OPT__OUTPUT_GRACKLE_MU    )  NDerField ++;
+      if ( OPT__OUTPUT_GRACKLE_TCOOL )  NDerField ++;
+#     endif
 #     endif
 
       if ( NDerField > DER_NOUT_MAX )
@@ -428,6 +437,9 @@ void Aux_Check_Parameter()
 #  ifdef SRHD
    Flag |= OPT__FLAG_LRTZ_GRADIENT;
 #  endif
+#  ifdef SUPPORT_GRACKLE
+   Flag |= OPT__FLAG_COOLING_LEN;
+#  endif
 #  ifdef COSMIC_RAY
    Flag |= OPT__FLAG_CRAY;
    Flag |= OPT__FLAG_LOHNER_CRAY;
@@ -444,6 +456,7 @@ void Aux_Check_Parameter()
    Flag |= OPT__FLAG_NPAR_PATCH;
    Flag |= OPT__FLAG_NPAR_CELL;
    Flag |= OPT__FLAG_PAR_MASS_CELL;
+   Flag |= OPT__FLAG_PAR_TARGET;
 #  endif
 
    if ( !Flag )
@@ -750,12 +763,16 @@ void Aux_Check_Parameter()
 #     error : RTVD does NOT support DUAL_ENERGY !!
 #   endif
 
+#   if (  defined DUAL_ENERGY_PREDICT  &&  ( FLU_SCHEME != MHM && FLU_SCHEME != MHM_RP )  )
+#     error : DUAL_ENERGY_PREDICT only supports FLU_SCHEME = MHM/MHM_RP !!
+#   endif
+
 #   if ( DUAL_ENERGY != DE_ENPY )
 #     error : ERROR : unsupported dual-energy formalism (DE_ENPY only, DE_EINT is not supported yet) !!
 #   endif
 
-#   if ( DUAL_ENERGY == DE_ENPY  &&  EOS != EOS_GAMMA )
-#     error : ERROR : DUAL_ENERGY=DE_ENPY only supports EOS_GAMMA !!
+#   if (  DUAL_ENERGY == DE_ENPY  &&  ( EOS != EOS_GAMMA && EOS != EOS_COSMIC_RAY )  )
+#     error : ERROR : DUAL_ENERGY=DE_ENPY only supports EOS_GAMMA/EOS_COSMIC_RAY !!
 #   endif
 #  endif // #ifdef DUAL_ENERGY
 
@@ -827,10 +844,6 @@ void Aux_Check_Parameter()
 
 #   if ( EOS != EOS_COSMIC_RAY )
 #     error : ERROR : COSMIC_RAY must use EOS_COSMIC_RAY !!
-#   endif
-
-#   ifdef DUAL_ENERGY
-#     error : ERROR : DUAL_ENERGY is not supported for COSMIC_RAY !!
 #   endif
 
 #   ifdef COMOVING
@@ -1437,7 +1450,7 @@ void Aux_Check_Parameter()
 #  endif
 
 #  else // GRAMFE_SCHEME
-#  error : ERROR : Unsupported GRAMFE_SCHEME !!
+#  error : ERROR : unsupported GRAMFE_SCHEME !!
 #  endif // GRAMFE_SCHEME
 
 #  else // WAVE_SCHEME
@@ -1810,6 +1823,27 @@ void Aux_Check_Parameter()
 #     error : ERROR : SUPPORT_GRACKLE must work with EOS_GAMMA/EOS_COSMIC_RAY !!
 #  endif
 
+   if ( ! GRACKLE_ACTIVATE )
+   {
+      if ( OPT__OUTPUT_GRACKLE_TEMP )
+         Aux_Error( ERROR_INFO, "OPT__OUTPUT_GRACKLE_TEMP requires the option GRACKLE_ACTIVATE !!\n");
+
+      if ( OPT__OUTPUT_GRACKLE_MU )
+         Aux_Error( ERROR_INFO, "OPT__OUTPUT_GRACKLE_MU requires the option GRACKLE_ACTIVATE !!\n");
+
+      if ( OPT__OUTPUT_GRACKLE_TCOOL )
+         Aux_Error( ERROR_INFO, "OPT__OUTPUT_GRACKLE_TCOOL requires the option GRACKLE_ACTIVATE !!\n");
+
+      if ( OPT__FLAG_COOLING_LEN )
+         Aux_Error( ERROR_INFO, "OPT__FLAG_COOLING_LEN requires the option GRACKLE_ACTIVATE !!\n");
+
+      if ( DT__GRACKLE_COOLING >= 0.0 )
+         Aux_Error( ERROR_INFO, "DT__GRACKLE_COOLING requires the option GRACKLE_ACTIVATE !!\n");
+
+      if ( OPT__UNFREEZE_GRACKLE )
+         Aux_Error( ERROR_INFO, "OPT__UNFREEZE_GRACKLE requires the option GRACKLE_ACTIVATE !!\n");
+   }
+
 // warning
 // ------------------------------
    if ( MPI_Rank == 0 ) {
@@ -1819,6 +1853,25 @@ void Aux_Check_Parameter()
 
    if ( GRACKLE_PRIMORDIAL > 0 )
       Aux_Message( stderr, "WARNING : adiabatic index gamma is currently fixed to %13.7e for Grackle !!\n", GAMMA );
+
+   if ( OPT__UNFREEZE_GRACKLE  &&  ! OPT__FREEZE_FLUID )
+      Aux_Message( stderr, "WARNING : OPT__UNFREEZE_GRACKLE is useless when OPT__FREEZE_FLUID is off !!\n" );
+
+   if ( OPT__UNFREEZE_GRACKLE  &&  OPT__FREEZE_FLUID )
+      Aux_Message( stderr, "REMINDER : OPT__UNFREEZE_GRACKLE will allow fluid variables to be updated by Grackle solver even with OPT__FREEZE_FLUID enabled !!\n" );
+
+   if ( OPT__OUTPUT_GRACKLE_TEMP  &&  OPT__OUTPUT_TEMP )
+   {
+      Aux_Message( stderr, "WARNING : temperature field calculated by Grackle is named \"GrackleTemp\"\n"   );
+      Aux_Message( stderr, "          and it is different from the default temperature field \"Temp\" !!\n" );
+   }
+
+   if ( GRACKLE_PRIMORDIAL == GRACKLE_PRI_CHE_CLOUDY )
+   {
+      Aux_Message( stderr, "WARNING : For GRACKLE_PRIMORDIAL == %d, GRACKLE_HYDROGEN_MFRAC = %13.7e is only used outside Grackle\n",
+                           GRACKLE_PRI_CHE_CLOUDY, GRACKLE_HYDROGEN_MFRAC );
+      Aux_Message( stderr, "          and it can be different from HydrogenFractionByMass determined by and used inside Grackle !!\n" );
+   }
 
    } // if ( MPI_Rank == 0 )
 
@@ -1839,6 +1892,20 @@ void Aux_Check_Parameter()
    if ( SrcTerms.Deleptonization )
       Aux_Error( ERROR_INFO, "SRC_DELEPTONIZATION is only supported in HYDRO !!\n" );
 #  endif
+
+#  ifdef EXACT_COOLING
+#  if ( MODEL != HYDRO )
+#     error : ERROR : EXACT_COOLING must enable MODEL=HYDRO !!
+#  endif
+
+#  ifdef COMOVING
+#     error : ERROR : EXACT_COOLING does not support COMOVING !!
+#  endif
+
+#  else // #ifdef EXACT_COOLING
+   if ( SrcTerms.ExactCooling )
+      Aux_Error( ERROR_INFO, "SRC_EXACTCOOLING is only supported when EXACT_COOLING is enabled !!\n" );
+#  endif // #ifdef EXACT_COOLING ... else ...
 
 // warning
 // ------------------------------
@@ -1862,6 +1929,19 @@ void Aux_Check_Parameter()
 #     error : STAR_FORMATION + STORE_PAR_ACC must work with STORE_POT_GHOST !!
 #  endif
 
+   if ( SF_CREATE_STAR_SCHEME != SF_CREATE_STAR_SCHEME_NONE )
+   {
+      const long SupportedCriteria = ( SF_CREATE_STAR_CRITERIA_HIGH_GAS_DENSITY | SF_CREATE_STAR_CRITERIA_LOW_GAS_TEMPERATURE | SF_CREATE_STAR_CRITERIA_UNRESOLVED_JEANS_LENGTH );
+      if ( SF_CREATE_STAR_CRITERIA <= SF_CREATE_STAR_CRITERIA_NONE  ||  ( SF_CREATE_STAR_CRITERIA & ~SupportedCriteria ) )
+         Aux_Error( ERROR_INFO, "unsupported SF_CREATE_STAR_CRITERIA (%d) !!\n", SF_CREATE_STAR_CRITERIA );
+
+      if ( SF_CREATE_STAR_MASS_RATE <= SF_CREATE_STAR_MASS_RATE_NONE )
+         Aux_Error( ERROR_INFO, "unsupported SF_CREATE_STAR_MASS_RATE (%d) !!\n", SF_CREATE_STAR_MASS_RATE );
+
+      if ( SF_CREATE_STAR_PAR_SPAWN <= SF_CREATE_STAR_PAR_SPAWN_NONE )
+         Aux_Error( ERROR_INFO, "unsupported SF_CREATE_STAR_PAR_SPAWN (%d) !!\n", SF_CREATE_STAR_PAR_SPAWN );
+   }
+
 // warning
 // ------------------------------
    if ( MPI_Rank == 0 ) {
@@ -1870,9 +1950,18 @@ void Aux_Check_Parameter()
       Aux_Message( stderr, "WARNING : SF_CREATE_STAR_MIN_LEVEL (%d) > MAX_LEVEL (%d) --> no star particles will form !!\n",
                    SF_CREATE_STAR_MIN_LEVEL, MAX_LEVEL );
 
-   if ( SF_CREATE_STAR_SCHEME == SF_CREATE_STAR_SCHEME_AGORA  &&  !SF_CREATE_STAR_DET_RANDOM )
+   if (  ( SF_CREATE_STAR_CRITERIA & SF_CREATE_STAR_CRITERIA_UNRESOLVED_JEANS_LENGTH )  &&  JEANS_MIN_PRES  )
    {
-      Aux_Message( stderr, "WARNING : SF_CREATE_STAR_SCHEME == 1 will break bitwise reproducibility due to the \n" );
+      Aux_Message( stderr, "WARNING : SF_CREATE_STAR_CRITERIA == %ld is incompatible with JEANS_MIN_PRES !!\n",
+                   SF_CREATE_STAR_CRITERIA );
+      Aux_Message( stderr, "          --> SF_CREATE_STAR_MAX_GAS_JEANSL = %14.8e, but JEANS_MIN_PRES_NCELL = %d and JEANS_MIN_PRES_LEVEL = %d\n",
+                   SF_CREATE_STAR_MAX_GAS_JEANSL, JEANS_MIN_PRES_NCELL, JEANS_MIN_PRES_LEVEL );
+   }
+
+   if ( SF_CREATE_STAR_PAR_SPAWN == SF_CREATE_STAR_PAR_SPAWN_STOCHASTIC_MIN_MASS
+        &&  !SF_CREATE_STAR_DET_RANDOM )
+   {
+      Aux_Message( stderr, "WARNING : SF_CREATE_STAR_PAR_SPAWN == %d will break bitwise reproducibility due to the\n", SF_CREATE_STAR_PAR_SPAWN_STOCHASTIC_MIN_MASS );
       Aux_Message( stderr, "          random values used for the stochastic star formation !!\n" );
       Aux_Message( stderr, "          --> Enable \"SF_CREATE_STAR_DET_RANDOM\" if reproducibility is of great concern\n" );
    }

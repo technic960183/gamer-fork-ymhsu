@@ -39,6 +39,9 @@ SET_GLOBAL( FieldIdx_t Idx_ADV_VZ,        Idx_Undefined );
 #ifdef DUAL_ENERGY
 SET_GLOBAL( FieldIdx_t Idx_Dual,          Idx_Undefined );
 #endif
+#ifdef EXACT_COOLING
+SET_GLOBAL( FieldIdx_t Idx_TCool,         Idx_Undefined );
+#endif
 
 // Grackle fields
 SET_GLOBAL( FieldIdx_t Idx_e,             Idx_Undefined );
@@ -95,6 +98,8 @@ SET_GLOBAL( FieldIdx_t Idx_ParVelY,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParVelZ,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParTime,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParType,       Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_ParPUID,       Idx_Undefined );
+SET_GLOBAL( FieldIdx_t Idx_ParFlag,       Idx_Undefined );
 #ifdef STORE_PAR_ACC
 SET_GLOBAL( FieldIdx_t Idx_ParAccX,       Idx_Undefined );
 SET_GLOBAL( FieldIdx_t Idx_ParAccY,       Idx_Undefined );

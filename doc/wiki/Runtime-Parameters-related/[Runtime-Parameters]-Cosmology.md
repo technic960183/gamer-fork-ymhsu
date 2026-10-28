@@ -1,11 +1,3 @@
-
-## Compilation Options
-
-Related options:
-[[--comoving | [Installation]-Option-List#--comoving]] &nbsp;
-
-## Runtime Parameters
-
 Parameters described on this page:
 [A_INIT](#A_INIT), &nbsp;
 [OMEGA_M0](#OMEGA_M0), &nbsp;
@@ -20,6 +12,7 @@ Parameters below are shown in the format: &ensp; **`Name` &ensp; (Valid Values) 
 * #### `A_INIT` &ensp; (>0.0) &ensp; [none]
     * **Description:**
 Initial cosmic scale factor.
+It will overwrite [[INIT_T | [Runtime-Parameters]-General#INIT_T]].
     * **Restriction:**
 
 <a name="OMEGA_M0"></a>
@@ -44,3 +37,4 @@ Dimensionless Hubble constant.
 
 ## Links
 * [[Main page of Runtime Parameters | Runtime Parameters]]
+* [[Main page of Cosmology | Cosmology]]

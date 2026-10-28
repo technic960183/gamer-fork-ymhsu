@@ -1,14 +1,3 @@
-This page describes the supported interpolation schemes for (i) grid refinement
-and (ii) preparing the ghost zones around any coarse-fine boundaries.
-
-
-## Compilation Options
-
-Related options: None
-
-
-## Runtime Parameters
-
 Parameters described on this page:
 [OPT__INT_TIME](#OPT__INT_TIME), &nbsp;
 [OPT__INT_PRIM](#OPT__INT_PRIM), &nbsp;
@@ -26,7 +15,8 @@ Parameters described on this page:
 [INT_OPP_SIGN_0TH_ORDER](#INT_OPP_SIGN_0TH_ORDER) &nbsp;
 
 Other related parameters:
-[[AUTO_REDUCE_INT_MONO_FACTOR | [Runtime-Parameters]-Timestep#AUTO_REDUCE_INT_MONO_FACTOR]] &nbsp;
+[[AUTO_REDUCE_INT_MONO_FACTOR | [Runtime-Parameters]-Timestep#AUTO_REDUCE_INT_MONO_FACTOR]], &nbsp;
+[[ OPT__INT_PHASE | [Runtime-Parameters]-ELBDM#OPT__INT_PHASE]] &nbsp;
 
 <a name="INT_TABLE"></a>
 Supported interpolation schemes:
@@ -41,6 +31,7 @@ Supported interpolation schemes:
 |5 | Non-conservative quadratic|
 |6 | Conservative quartic|
 |7 | Non-conservative quartic|
+|8 | Spectral |
 
 
 Parameters below are shown in the format: &ensp; **`Name` &ensp; (Valid Values) &ensp; [Default Value]**
@@ -151,3 +142,4 @@ velocity in low-density valleys.
 
 ## Links
 * [[Main page of Runtime Parameters | Runtime Parameters]]
+* [[Main page of Refinement | Refinement]]
